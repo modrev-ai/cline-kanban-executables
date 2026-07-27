@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Single-command startup for Kanban, Cline, AND Tailscale proxy for remote access.
     
@@ -74,7 +74,7 @@ $proxyPort   = 3484   # Public proxy port (0.0.0.0, accessible via Tailscale)
 
 $tailscalePath = "C:\\Program Files\\Tailscale\\tailscale.exe"
 $clineCmdPath  = "$env:APPDATA\\npm\\cline.cmd"
-$proxyScriptPath = "C:\\Workstation\\cline\\kanban-proxy.js"
+$proxyScriptPath = "C:\\Workstation\\cline-kanban-executables\\prod_executable\\kanban-proxy.js"
 
 $processes = @()
 
@@ -96,7 +96,9 @@ function Cleanup {
     
     Write-Host "Done." -ForegroundColor Cyan
 }
-n# Register cleanup on exittrap { Cleanup; break }
+
+# Register cleanup on exit
+trap { Cleanup; break }
 
 function Kill-Existing {
     Write-Host "[1/$script:TotalSteps] Terminating existing processes..." -ForegroundColor Yellow
@@ -149,7 +151,8 @@ function Start-Proxy {
     $nodePath = "$env:APPDATA\\npm\\node_modules"
     $env:NODE_PATH = $nodePath
     
-    $proc = Start-Process -FilePath "node" -ArgumentList "`\"$proxyScriptPath\"" -PassThru -NoNewWindow -WorkingDirectory "C:\\Workstation"
+    $proxyDir = Split-Path $proxyScriptPath -Parent
+    $proc = Start-Process -FilePath "node" -ArgumentList "`\"$proxyScriptPath\"" -PassThru -NoNewWindow -WorkingDirectory $proxyDir
     $processes += $proc
     
     # Wait for proxy to start
@@ -201,7 +204,7 @@ function Start-Tailscale {
     }
     
     $serveResult = & $tailscalePath serve --bg --yes localhost:$proxyPort 2>&1
-    $serveResult | ForEach-Object { Write-Host $_ }
+    if ($serveResult) { Write-Host $serveResult }
     
     $serveStatus = & $tailscalePath serve status --json 2>&1
     if ($serveStatus -match "Serve is not enabled" -or $serveStatus -match "not enabled") {
@@ -307,4 +310,13 @@ if (-not $KanbanOnly) {
 }
 
 Write-Host "Press Ctrl+C to stop all services." -ForegroundColor Cyan
-n# Keep script runningwhile ($true) {    Start-Sleep -Seconds 2        # Check for unexpected exits    foreach ($proc in $processes) {        if ($proc -and $proc.HasExited) {            Write-Host ""            Write-Host "[ERROR] A service exited unexpectedly." -ForegroundColor Red            Cleanup            exit 1        }    }}
+
+# Keep script running to maintain background processes (proxy, etc.)
+try {
+    while ($true) {
+        Start-Sleep -Seconds 1
+    }
+}
+catch {
+    Cleanup
+}
