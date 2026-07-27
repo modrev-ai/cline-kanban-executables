@@ -116,7 +116,9 @@ function Start-Kanban {
     $cmd = "cd C:\\Workstation\\kanban; ${buildCmd}`$env:KANBAN_RUNTIME_HOST='127.0.0.1'; `$env:KANBAN_RUNTIME_PORT='$kanbanPort'; npm run dev"
     
     if ($NoNewWindow) {
-        Invoke-Expression $cmd
+        # Start in background so script can continue to keep-alive loop
+        $proc = Start-Process powershell -ArgumentList "-NoExit", "-Command", $cmd -PassThru
+        $processes += $proc
     } else {
         $proc = Start-Process powershell -ArgumentList "-NoExit", "-Command", $cmd -PassThru
         $processes += $proc
@@ -132,7 +134,9 @@ function Start-Cline {
     $cmd += "bun run cli"
     
     if ($NoNewWindow) {
-        Invoke-Expression $cmd
+        # Start in background so script can continue to keep-alive loop
+        $proc = Start-Process powershell -ArgumentList "-NoExit", "-Command", $cmd -PassThru
+        $processes += $proc
     } else {
         $proc = Start-Process powershell -ArgumentList "-NoExit", "-Command", $cmd -PassThru
         $processes += $proc
@@ -152,7 +156,7 @@ function Start-Proxy {
     $env:NODE_PATH = $nodePath
     
     $proxyDir = Split-Path $proxyScriptPath -Parent
-    $proc = Start-Process -FilePath "node" -ArgumentList "`\"$proxyScriptPath\"" -PassThru -NoNewWindow -WorkingDirectory $proxyDir
+    $proc = Start-Process -FilePath "node" -ArgumentList $proxyScriptPath -PassThru -NoNewWindow -WorkingDirectory $proxyDir
     $processes += $proc
     
     # Wait for proxy to start
@@ -254,7 +258,7 @@ if (-not $ClineOnly) { $script:TotalSteps++ }  # Start-Kanban
 if (-not $ClineOnly -and -not $NoProxy) { $script:TotalSteps++ }  # Start-Proxy
 if (-not $ClineOnly -and -not $NoProxy -and -not $NoTailscale) { $script:TotalSteps++ }  # Start-Tailscale
 if (-not $KanbanOnly) { $script:TotalSteps++ }  # Start-Cline
-$script:TotalSteps++  # Wait-For-Kanban (if Kanban runs)
+if (-not $ClineOnly) { $script:TotalSteps++ }  # Wait-For-Kanban (only if Kanban runs)
 $script:Step = 2  # Services start at step 2
 
 Write-Host "========================================" -ForegroundColor Cyan
