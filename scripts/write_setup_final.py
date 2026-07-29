@@ -1,0 +1,1 @@
+parts=['part1','part2']; f=open(sys.argv[1],'w'); f.write(parts[0]+parts[1])
