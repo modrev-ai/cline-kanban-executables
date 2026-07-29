@@ -1,1 +1,1 @@
-"# GitHub Actions workflow generator" 
+"# Python script to write deploy-oracle.yml" 
