@@ -1,13 +1,35 @@
-﻿name: Test Workflow
+# GitHub Actions workflow for Oracle Cloud deployment
+name: Deploy to Oracle Cloud Free Tier
 
 on:
   push:
     branches: [main, feature/kanban-dashboard-antigravity-tailscale]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      oracle_host:
+        description: "Oracle Cloud instance public IP or hostname"
+        required: true
+        type: string
+      oracle_user:
+        description: "SSH username (usually ubuntu)"
+        required: false
+        default: "ubuntu"
+        type: string
+      ssh_key:
+        description: "SSH private key for authentication"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  test:
+  deploy:
+    name: Deploy to Oracle Cloud
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
     steps:
-      - name: Test
-        run: echo "Hello World"
