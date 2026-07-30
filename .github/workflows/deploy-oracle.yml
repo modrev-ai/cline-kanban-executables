@@ -1,4 +1,4 @@
-# GitHub Actions workflow for Oracle Cloud deployment
+﻿# GitHub Actions workflow for Oracle Cloud deployment
 name: Deploy to Oracle Cloud Free Tier
 
 on:
@@ -31,7 +31,7 @@ jobs:
     name: Deploy to Oracle Cloud
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: production
+    # environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -282,3 +282,4 @@ SCRIPTEOF
             log_info "Rollback complete"
             pm2 status
           EOF
+
