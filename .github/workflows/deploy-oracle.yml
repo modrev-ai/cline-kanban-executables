@@ -1,4 +1,4 @@
-# GitHub Actions workflow for Oracle Cloud deployment
+﻿# GitHub Actions workflow for Oracle Cloud deployment
 name: Deploy to Oracle Cloud Free Tier
 
 on:
