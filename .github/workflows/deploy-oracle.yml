@@ -61,9 +61,9 @@ jobs:
         run: |
           scp README.md ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/
 
-      - name: Create systemd service files on Oracle
+      - name: Create kanban-proxy systemd service file locally
         run: |
-          ssh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /etc/systemd/system/kanban-proxy.service << 'EOF'
+          cat > kanban-proxy.service << 'EOF'
 [Unit]
 Description=Kanban Header Rewriting Proxy
 After=network.target
@@ -81,11 +81,11 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOF"
+EOF
 
-      - name: Create kanban-server systemd service
+      - name: Create kanban-server systemd service file locally
         run: |
-          ssh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /etc/systemd/system/kanban-server.service << 'EOF'
+          cat > kanban-server.service << 'EOF'
 [Unit]
 Description=Kanban Server (Cline)
 After=network.target
@@ -105,7 +105,12 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOF"
+EOF
+
+      - name: Deploy systemd service files via SCP
+        run: |
+          scp kanban-proxy.service kanban-server.service ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/
+          ssh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "sudo mv /tmp/kanban-proxy.service /etc/systemd/system/ && sudo mv /tmp/kanban-server.service /etc/systemd/system/"
 
       - name: Reload systemd and enable services
         run: |
