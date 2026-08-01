@@ -35,7 +35,7 @@ jobs:
       - name: Setup SSH key
         run: |
           mkdir -p $env:USERPROFILE\.ssh
-          echo "${{ env.ORACLE_SSH_KEY }}" > $env:USERPROFILE\.ssh\oracle_key
+          echo "${{ secrets.ORACLE_SSH_KEY }}" > $env:USERPROFILE\.ssh\oracle_key
           icacls $env:USERPROFILE\.ssh\oracle_key /inheritance:r /grant:r "%USERNAME%:F"
           ssh-keyscan -H ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts
 
