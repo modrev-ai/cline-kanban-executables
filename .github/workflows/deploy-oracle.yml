@@ -66,17 +66,18 @@ jobs:
 
       - name: Install Node.js and dependencies on Oracle
         run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
-            if ! command -v node &> /dev/null; then
-              curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
-              sudo dnf install -y nodejs
-            fi
-            sudo npm install -g http-proxy
-            sudo npm install -g cline
-            node --version
-            npm --version
-            cline --version
-          "
+          $cmd = @"
+if ! command -v node &> /dev/null; then
+  curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+  sudo dnf install -y nodejs
+fi
+sudo npm install -g http-proxy
+sudo npm install -g cline
+node --version
+npm --version
+cline --version
+"@
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} $cmd
 
       - name: Create kanban-proxy systemd service file locally
         run: |
