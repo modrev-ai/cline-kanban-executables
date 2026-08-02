@@ -16,11 +16,16 @@ on:
         required: false
 
 jobs:
+  validate-yaml:
+    name: Validate YAML Syntax
+    uses: ./.github/workflows/validate-yaml.yml
+
   deploy:
     name: Deploy to Oracle Compute
     runs-on: windows-latest
     environment: ${{ github.event.inputs.environment }}
     timeout-minutes: 30
+    needs: validate-yaml
 
     env:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
