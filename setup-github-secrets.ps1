@@ -86,6 +86,11 @@ if (-not (Test-Path $SshKeyPath)) {
 $sshKey = Get-Content $SshKeyPath -Raw
 Write-Host "✓ SSH key loaded" -ForegroundColor Green
 
+# Create base64 encoded version for the workflow
+$sshKeyBytes = [System.Text.Encoding]::UTF8.GetBytes($sshKey)
+$sshKeyB64 = [System.Convert]::ToBase64String($sshKeyBytes)
+Write-Host "✓ SSH key base64 encoded" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "Setting up GitHub secrets..." -ForegroundColor Yellow
 
@@ -102,6 +107,11 @@ Write-Host " ✓" -ForegroundColor Green
 # Set ORACLE_SSH_KEY
 Write-Host "Setting ORACLE_SSH_KEY..." -NoNewline
 gh secret set ORACLE_SSH_KEY --body $sshKey --repo "$RepoOwner/$RepoName" 2>$null
+Write-Host " ✓" -ForegroundColor Green
+
+# Set ORACLE_SSH_KEY_B64
+Write-Host "Setting ORACLE_SSH_KEY_B64..." -NoNewline
+gh secret set ORACLE_SSH_KEY_B64 --body $sshKeyB64 --repo "$RepoOwner/$RepoName" 2>$null
 Write-Host " ✓" -ForegroundColor Green
 
 # Set DEPLOY_PATH

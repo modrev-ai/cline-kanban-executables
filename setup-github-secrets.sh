@@ -44,7 +44,8 @@ if [ ! -f "$SSH_KEY_PATH" ]; then
     exit 1
 fi
 
-SSH_KEY=$(cat "$SSH_KEY_PATH" | sed ':a;N;$!ba;s/\n/\\n/g')
+SSH_KEY=$(cat "$SSH_KEY_PATH")
+SSH_KEY_B64=$(cat "$SSH_KEY_PATH" | base64 -w 0)
 
 echo "Setting up GitHub secrets..."
 
@@ -59,6 +60,10 @@ gh secret set ORACLE_USER --body "$ORACLE_USER" --repo "$REPO_OWNER/$REPO_NAME"
 # Set ORACLE_SSH_KEY
 echo "Setting ORACLE_SSH_KEY..."
 gh secret set ORACLE_SSH_KEY --body "$SSH_KEY" --repo "$REPO_OWNER/$REPO_NAME"
+
+# Set ORACLE_SSH_KEY_B64
+echo "Setting ORACLE_SSH_KEY_B64..."
+gh secret set ORACLE_SSH_KEY_B64 --body "$SSH_KEY_B64" --repo "$REPO_OWNER/$REPO_NAME"
 
 # Set DEPLOY_PATH
 echo "Setting DEPLOY_PATH..."
