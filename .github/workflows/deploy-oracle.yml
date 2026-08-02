@@ -68,16 +68,16 @@ jobs:
       - name: Install Node.js and dependencies on Oracle
         run: |
           $script = @"
-if ! command -v node &> /dev/null; then
-  curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
-  sudo dnf install -y nodejs
-fi
-sudo npm install -g http-proxy
-sudo npm install -g cline
-node --version
-npm --version
-cline --version
-"@
+          if ! command -v node &> /dev/null; then
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+            sudo dnf install -y nodejs
+          fi
+          sudo npm install -g http-proxy
+          sudo npm install -g cline
+          node --version
+          npm --version
+          cline --version
+          "@
           # Write script to file with LF line endings to avoid CRLF issues
           $scriptPath = "$env:USERPROFILE\install-node.sh"
           [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n").Replace("`r", "`n"), [System.Text.Encoding]::UTF8)
