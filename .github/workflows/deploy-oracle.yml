@@ -111,6 +111,7 @@ chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
             with open('kanban-proxy.service', 'w') as f:
                 f.write(content)
             PYEOF
+        shell: bash
 
       - name: Create kanban-server systemd service file locally
         run: |
@@ -140,6 +141,7 @@ chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
             with open('kanban-server.service', 'w') as f:
                 f.write(content)
             PYEOF
+        shell: bash
 
       - name: Deploy systemd service files via SCP
         run: |
