@@ -67,7 +67,8 @@ jobs:
 
       - name: Install Node.js and dependencies on Oracle
         run: |
-          $script = @"
+          # Create bash script directly on remote server to avoid line ending issues
+          $installScript = @"
 if ! command -v node &> /dev/null; then
   curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
   sudo dnf install -y nodejs
@@ -78,11 +79,12 @@ node --version
 npm --version
 cline --version
 "@
-          # Write script to file with LF line endings and NO BOM to avoid bash syntax error
-          $scriptPath = "$env:USERPROFILE\install-node.sh"
-          [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n").Replace("`r", "`n"), [System.Text.Encoding]::ASCII)
-          scp -i $env:USERPROFILE\.ssh\oracle_key $scriptPath ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-node.sh
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
+          # Write script to remote server using SSH heredoc (avoids SCP line ending issues)
+          $escapedScript = $installScript.Replace("`r`n", "`n").Replace("`r", "`n").Replace('"', '\"').Replace('$', '\$').Replace('`', '\`')
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /tmp/install-node.sh << 'EOF'
+$escapedScript
+EOF
+chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
         shell: pwsh
 
       - name: Create kanban-proxy systemd service file locally
