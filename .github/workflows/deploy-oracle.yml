@@ -66,7 +66,7 @@ jobs:
 
       - name: Install Node.js and dependencies on Oracle
         run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} << 'EOF'
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
             if ! command -v node &> /dev/null; then
               curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
               sudo dnf install -y nodejs
@@ -76,63 +76,59 @@ jobs:
             node --version
             npm --version
             cline --version
-          EOF
+          "
 
       - name: Create kanban-proxy systemd service file locally
         run: |
-          python3 << 'PYEOF'
-            import os
-            dep = os.environ.get('DEPLOY_PATH', '/home/opc/cline-kanban')
-            content = """[Unit]
-Description=Kanban Header Rewriting Proxy
-After=network.target
-
-[Service]
-Type=simple
-User=opc
-WorkingDirectory={dep}/prod_executable
-Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules
-ExecStart=/usr/bin/node kanban-proxy.js
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-""".format(dep=dep)
-            with open('kanban-proxy.service', 'w') as f:
-                f.write(content)
-            PYEOF
+          $dep = "${{ env.DEPLOY_PATH }}"
+          if (-not $dep) { $dep = "/home/opc/cline-kanban" }
+          $lines = @(
+            "[Unit]",
+            "Description=Kanban Header Rewriting Proxy",
+            "After=network.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            "User=opc",
+            "WorkingDirectory=$dep/prod_executable",
+            "Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules",
+            "ExecStart=/usr/bin/node kanban-proxy.js",
+            "Restart=on-failure",
+            "RestartSec=5",
+            "StandardOutput=journal",
+            "StandardError=journal",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target"
+          )
+          $lines -join "`n" | Set-Content -Path "kanban-proxy.service" -Encoding UTF8
 
       - name: Create kanban-server systemd service file locally
         run: |
-          python3 << 'PYEOF'
-            import os
-            dep = os.environ.get('DEPLOY_PATH', '/home/opc/cline-kanban')
-            content = """[Unit]
-Description=Kanban Server (Cline)
-After=network.target
-
-[Service]
-Type=simple
-User=opc
-WorkingDirectory={dep}
-Environment=KANBAN_RUNTIME_HOST=127.0.0.1
-Environment=KANBAN_RUNTIME_PORT=3485
-Environment=NODE_ENV=production
-ExecStart=/usr/bin/cline kanban
-Restart=on-failure
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-""".format(dep=dep)
-            with open('kanban-server.service', 'w') as f:
-                f.write(content)
-            PYEOF
+          $dep = "${{ env.DEPLOY_PATH }}"
+          if (-not $dep) { $dep = "/home/opc/cline-kanban" }
+          $lines = @(
+            "[Unit]",
+            "Description=Kanban Server (Cline)",
+            "After=network.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            "User=opc",
+            "WorkingDirectory=$dep",
+            "Environment=KANBAN_RUNTIME_HOST=127.0.0.1",
+            "Environment=KANBAN_RUNTIME_PORT=3485",
+            "Environment=NODE_ENV=production",
+            "ExecStart=/usr/bin/cline kanban",
+            "Restart=on-failure",
+            "RestartSec=10",
+            "StandardOutput=journal",
+            "StandardError=journal",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target"
+          )
+          $lines -join "`n" | Set-Content -Path "kanban-server.service" -Encoding UTF8
 
       - name: Deploy systemd service files via SCP
         run: |
@@ -141,23 +137,23 @@ WantedBy=multi-user.target
 
       - name: Reload systemd and enable services
         run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} << 'EOF'
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
             sudo systemctl daemon-reload &&
             sudo systemctl enable kanban-proxy kanban-server &&
             sudo systemctl restart kanban-proxy kanban-server
-          EOF
+          "
 
       - name: Wait for services to start
         run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} << 'EOF'
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
             sleep 10 &&
             systemctl status kanban-proxy --no-pager &&
             systemctl status kanban-server --no-pager
-          EOF
+          "
 
       - name: Check service status
         run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} << 'EOF'
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
             echo '=== kanban-proxy status ==='
             systemctl status kanban-proxy --no-pager -l
             echo ''
@@ -169,7 +165,7 @@ WantedBy=multi-user.target
             echo ''
             echo '=== Tailscale status ==='
             tailscale status 2>/dev/null || echo 'Tailscale not running'
-          EOF
+          "
 
       - name: Deployment summary
         run: |
