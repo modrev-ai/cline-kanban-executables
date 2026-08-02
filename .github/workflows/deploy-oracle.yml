@@ -66,7 +66,7 @@ jobs:
 
       - name: Install Node.js and dependencies on Oracle
         run: |
-          $cmd = @"
+          $script = @"
 if ! command -v node &> /dev/null; then
   curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
   sudo dnf install -y nodejs
@@ -77,7 +77,11 @@ node --version
 npm --version
 cline --version
 "@
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} $cmd
+          # Write script to file with LF line endings to avoid CRLF issues
+          $scriptPath = "$env:USERPROFILE\install-node.sh"
+          [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n").Replace("`r", "`n"), [System.Text.Encoding]::UTF8)
+          scp -i $env:USERPROFILE\.ssh\oracle_key $scriptPath ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-node.sh
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
 
       - name: Create kanban-proxy systemd service file locally
         run: |
