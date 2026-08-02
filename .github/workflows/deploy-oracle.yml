@@ -1,284 +1,194 @@
-# GitHub Actions workflow for Oracle Cloud deployment
-name: Deploy to Oracle Cloud Free Tier
+name: Deploy to Oracle Compute
 
 on:
-  push:
-    branches: [main, feature/kanban-dashboard-antigravity-tailscale]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
-      oracle_host:
-        description: "Oracle Cloud instance public IP or hostname"
-        required: true
-        type: string
-      oracle_user:
-        description: "SSH username (usually ubuntu)"
+      environment:
+        description: 'Deployment environment'
+        type: choice
+        options:
+          - production
+        default: 'production'
+      force:
+        description: 'Force deployment even if no changes'
+        type: boolean
+        default: false
         required: false
-        default: "ubuntu"
-        type: string
-      ssh_key:
-        description: "SSH private key for authentication"
-        required: true
-        type: string
-
-permissions:
-  contents: read
-  id-token: write
 
 jobs:
   deploy:
-    name: Deploy to Oracle Cloud
-    runs-on: ubuntu-latest
+    name: Deploy to Oracle Compute
+    runs-on: windows-latest
+    environment: ${{ github.event.inputs.environment }}
     timeout-minutes: 30
-    environment: production
+
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ github.event.inputs.ssh_key || secrets.ORACLE_SSH_KEY }}
-
-      - name: Add known hosts
+      - name: Setup SSH key
+        env:
+          ORACLE_SSH_KEY_B64: ${{ secrets.ORACLE_SSH_KEY_B64 }}
         run: |
-          ssh-keyscan -H ${{ github.event.inputs.oracle_host || secrets.ORACLE_INSTANCE_HOST }} >> ~/.ssh/known_hosts
+          mkdir -p $env:USERPROFILE\.ssh
+          $key = $env:ORACLE_SSH_KEY_B64
+          $bytes = [System.Convert]::FromBase64String($key)
+          [System.IO.File]::WriteAllBytes("$env:USERPROFILE\.ssh\oracle_key", $bytes)
+          icacls "$env:USERPROFILE\.ssh\oracle_key" /inheritance:r /grant:r "$env:USERNAME:F"
+          ssh-keyscan -H ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts
 
-      - name: Deploy to Oracle Cloud
+      - name: Test SSH connection
         run: |
-          ssh -o StrictHostKeyChecking=no \
-            ${{ github.event.inputs.oracle_user || 'ubuntu' }}@${{ github.event.inputs.oracle_host || secrets.ORACLE_INSTANCE_HOST }} << 'EOF'
-          log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
-          log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
-          log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; }
+          ssh -i $env:USERPROFILE\.ssh\oracle_key -o ConnectTimeout=10 -o BatchMode=yes ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "echo 'SSH connection successful'"
 
-          log_info "Starting deployment..."
-
-          # Update system
-          log_info "Updating system..."
-          sudo apt update && sudo apt upgrade -y
-
-          # Install essential packages
-          log_info "Installing essential packages..."
-          sudo apt install -y curl wget git unzip htop nginx certbot python3-certbot-nginx build-essential python3 ufw fail2ban
-
-          # Configure firewall
-          log_info "Configuring firewall..."
-          sudo ufw allow 22/tcp
-          sudo ufw allow 80/tcp
-          sudo ufw allow 443/tcp
-          sudo ufw allow 41641/udp
-          sudo ufw --force enable
-
-          # Install Node.js 20 LTS
-          log_info "Installing Node.js 20 LTS..."
-          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-          sudo apt install -y nodejs
-
-          # Verify Node.js
-          log_info "Node.js version: $(node --version)"
-          log_info "npm version: $(npm --version)"
-
-          # Install pnpm
-          corepack enable
-          corepack prepare pnpm@latest --activate
-
-          # Install Tailscale
-          curl -fsSL https://tailscale.com/install.sh | sh
-          sudo tailscale up --ssh
-          TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "Not connected yet")
-          log_info "Tailscale IP: $TAILSCALE_IP"
-
-          # Install PM2
-          sudo npm install -g pm2
-
-          # Create log directory
-          sudo mkdir -p /var/log/pm2
-          sudo chown -R ubuntu:ubuntu /var/log/pm2
-
-          # Clone Kanban repository
-          log_info "Cloning Kanban repository..."
-          cd /opt
-          if [ ! -d "kanban" ]; then
-            sudo git clone https://github.com/modrev-ai/kanban.git
-            sudo chown -R ubuntu:ubuntu kanban
-          fi
-          cd kanban
-
-          # Install Kanban dependencies
-          log_info "Installing Kanban dependencies..."
-          pnpm install --frozen-lockfile
-
-          # Build Kanban
-          log_info "Building Kanban..."
-          pnpm run build
-
-          # Build web-ui specifically
-          cd web-ui
-          pnpm run build
-
-          # Create Kanban start script
-          cat > /opt/kanban/start-kanban.sh << 'SCRIPTEOF'
-#!/bin/bash
-cd /opt/kanban/web-ui
-export NODE_ENV=production
-export PORT=3000
-exec pnpm preview --host 0.0.0.0 --port 3000
-SCRIPTEOF
-chmod +x /opt/kanban/start-kanban.sh
-
-          # Clone Cline Dashboard repository
-          log_info "Cloning Cline Dashboard repository..."
-          cd /opt
-          if [ ! -d "cline-dashboard" ]; then
-            sudo git clone https://github.com/modrev-ai/cline-kanban-executables.git cline-dashboard
-            sudo chown -R ubuntu:ubuntu cline-dashboard
-          fi
-          cd cline-dashboard
-
-          # Install Cline Dashboard dependencies
-          log_info "Installing Cline Dashboard dependencies..."
-          npm install
-
-          # Initialize database
-          log_info "Initializing Cline Dashboard database..."
-          npm run db:init
-
-# Create Cline start script
-          cat > /opt/cline-dashboard/start-cline.sh << 'SCRIPTEOF'
-#!/bin/bash
-cd /opt/cline-dashboard
-export NODE_ENV=production
-export PORT=3001
-export HOST=0.0.0.0
-export AGY_COMMAND=agy
-export AGY_ARGS="run --prompt {prompt} --json-logs"
-exec npm start
-SCRIPTEOF
-chmod +x /opt/cline-dashboard/start-cline.sh
-
-          # Create PM2 ecosystem file
-          cat > /opt/ecosystem.config.js << 'SCRIPTEOF'
-module.exports = {
-  apps: [
-    {
-      name: 'kanban-web',
-      script: '/opt/kanban/start-kanban.sh',
-      cwd: '/opt/kanban/web-ui',
-      env: {
-        NODE_ENV: 'production',
-        PORT: 3000,
-        HOST: '0.0.0.0'
-      },
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '1G',
-      error_file: '/var/log/pm2/kanban-error.log',
-      out_file: '/var/log/pm2/kanban-out.log',
-      log_date_format: 'YYYY-MM-DD HH:mm:ss Z'
-    },
-    {
-      name: 'cline-dashboard',
-      script: '/opt/cline-dashboard/start-cline.sh',
-      cwd: '/opt/cline-dashboard',
-      env: {
-        NODE_ENV: 'production',
-        PORT: 3001,
-        HOST: '0.0.0.0',
-        AGY_COMMAND: 'agy',
-        AGY_ARGS: 'run --prompt {prompt} --json-logs'
-      },
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '1G',
-      error_file: '/var/log/pm2/cline-error.log',
-      out_file: '/var/log/pm2/cline-out.log',
-      log_date_format: 'YYYY-MM-DD HH:mm:ss Z'
-    }
-  ]
-};
-SCRIPTEOF
-
-          # Start applications with PM2
-          log_info "Starting applications with PM2..."
-          pm2 start /opt/ecosystem.config.js
-
-          # Save PM2 configuration
-          pm2 save
-
-          # Setup PM2 startup
-          STARTUP_CMD=$(pm2 startup systemd -u ubuntu --hp /home/ubuntu | tail -1)
-          if [[ $STARTUP_CMD == sudo* ]]; then
-            eval $STARTUP_CMD
-          fi
-
-          log_info "Deployment complete! Check status with: pm2 status"
-
-          # Verify deployment
-          curl -sf http://localhost:3000 >/dev/null && echo "Kanban OK" || echo "Kanban FAILED"
-          curl -sf http://localhost:3001/api/health >/dev/null && echo "Cline OK" || echo "Cline FAILED"
-
-          # Show Tailscale IP
-          TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "Not connected")
-          echo ""
-          echo "=========================================="
-          echo "Deployment Complete!"
-          echo "=========================================="
-          echo "Kanban: http://$(hostname -I | awk '{print $1}'):3000"
-          echo "Cline:  http://$(hostname -I | awk '{print $1}'):3001"
-          echo "Tailscale: ${TAILSCALE_IP}:3000 (Kanban) / ${TAILSCALE_IP}:3001 (Cline)"
-          echo "=========================================="
-          EOF
-
-  verify:
-    name: Verify Deployment
-    runs-on: ubuntu-latest
-    needs: deploy
-    steps:
-      - name: Verify deployment
+      - name: Create deploy directory on Oracle
         run: |
-          ssh -o StrictHostKeyChecking=no \
-            ${{ github.event.inputs.oracle_user || 'ubuntu' }}@${{ github.event.inputs.oracle_host || secrets.ORACLE_INSTANCE_HOST }} \
-            "curl -sf http://localhost:3000 >/dev/null && echo 'Kanban OK' || echo 'Kanban FAILED'; \
-             curl -sf http://localhost:3001/api/health >/dev/null && echo 'Cline OK' || echo 'Cline FAILED'"
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "mkdir -p ${{ env.DEPLOY_PATH }}/prod_executable"
 
-  notify:
-    name: Notify Deployment Status
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: always()
-    steps:
-      - name: Send notification
-        if: failure()
+      - name: Deploy prod_executable files via SCP
         run: |
-          echo "Deployment failed! Check GitHub Actions for details."
-          # Add Slack/Discord/email notification here if desired
+          scp -i $env:USERPROFILE\.ssh\oracle_key -r prod_executable/* ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/prod_executable/
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x ${{ env.DEPLOY_PATH }}/prod_executable/cline-remote-launch.sh"
 
-      - name: Success notification
-        if: success()
+      - name: Deploy start scripts via SCP
         run: |
-          echo "Deployment successful!"
-          echo "Access via Tailscale or configured domain"
+          scp -i $env:USERPROFILE\.ssh\oracle_key start-all.bat start-all.ps1 start-all-with-tailscale.bat start-all-with-tailscale.ps1 ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/
 
-  rollback:
-    name: Rollback on Failure
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: failure()
-    steps:
-      - name: Rollback
+      - name: Deploy README
         run: |
-          ssh -o StrictHostKeyChecking=no \
-            ${{ github.event.inputs.oracle_user || 'ubuntu' }}@${{ github.event.inputs.oracle_host || secrets.ORACLE_INSTANCE_HOST }} << 'EOF'
-            log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
-            log_info "Rolling back..."
-            pm2 delete all 2>/dev/null || true
-            pm2 start /opt/ecosystem.config.js 2>/dev/null || true
-            log_info "Rollback complete"
-            pm2 status
-          EOF
+          scp -i $env:USERPROFILE\.ssh\oracle_key README.md ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/
+
+      - name: Install Node.js and dependencies on Oracle
+        run: |
+          $script = @"
+if ! command -v node &> /dev/null; then
+  curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+  sudo dnf install -y nodejs
+fi
+sudo npm install -g http-proxy
+sudo npm install -g cline
+node --version
+npm --version
+cline --version
+"@
+          # Write script to file with LF line endings to avoid CRLF issues
+          $scriptPath = "$env:USERPROFILE\install-node.sh"
+          [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n").Replace("`r", "`n"), [System.Text.Encoding]::UTF8)
+          scp -i $env:USERPROFILE\.ssh\oracle_key $scriptPath ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-node.sh
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
+
+      - name: Create kanban-proxy systemd service file locally
+        run: |
+          $dep = "${{ env.DEPLOY_PATH }}"
+          if (-not $dep) { $dep = "/home/opc/cline-kanban" }
+          $lines = @(
+            "[Unit]",
+            "Description=Kanban Header Rewriting Proxy",
+            "After=network.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            "User=opc",
+            "WorkingDirectory=$dep/prod_executable",
+            "Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules",
+            "ExecStart=/usr/bin/node kanban-proxy.js",
+            "Restart=on-failure",
+            "RestartSec=5",
+            "StandardOutput=journal",
+            "StandardError=journal",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target"
+          )
+          $lines -join "`n" | Set-Content -Path "kanban-proxy.service" -Encoding UTF8
+
+      - name: Create kanban-server systemd service file locally
+        run: |
+          $dep = "${{ env.DEPLOY_PATH }}"
+          if (-not $dep) { $dep = "/home/opc/cline-kanban" }
+          $lines = @(
+            "[Unit]",
+            "Description=Kanban Server (Cline)",
+            "After=network.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            "User=opc",
+            "WorkingDirectory=$dep",
+            "Environment=KANBAN_RUNTIME_HOST=127.0.0.1",
+            "Environment=KANBAN_RUNTIME_PORT=3485",
+            "Environment=NODE_ENV=production",
+            "ExecStart=/usr/bin/cline kanban",
+            "Restart=on-failure",
+            "RestartSec=10",
+            "StandardOutput=journal",
+            "StandardError=journal",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target"
+          )
+          $lines -join "`n" | Set-Content -Path "kanban-server.service" -Encoding UTF8
+
+      - name: Deploy systemd service files via SCP
+        run: |
+          scp -i $env:USERPROFILE\.ssh\oracle_key kanban-proxy.service kanban-server.service ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "sudo mv /tmp/kanban-proxy.service /etc/systemd/system/ && sudo mv /tmp/kanban-server.service /etc/systemd/system/"
+
+      - name: Reload systemd and enable services
+        run: |
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
+            sudo systemctl daemon-reload &&
+            sudo systemctl enable kanban-proxy kanban-server &&
+            sudo systemctl restart kanban-proxy kanban-server
+          "
+
+      - name: Wait for services to start
+        run: |
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
+            sleep 10 &&
+            systemctl status kanban-proxy --no-pager &&
+            systemctl status kanban-server --no-pager
+          "
+
+      - name: Check service status
+        run: |
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
+            echo '=== kanban-proxy status ==='
+            systemctl status kanban-proxy --no-pager -l
+            echo ''
+            echo '=== kanban-server status ==='
+            systemctl status kanban-server --no-pager -l
+            echo ''
+            echo '=== Port status ==='
+            ss -tlnp | grep -E ':3484|:3485'
+            echo ''
+            echo '=== Tailscale status ==='
+            tailscale status 2>/dev/null || echo 'Tailscale not running'
+          "
+
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ github.event.inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Oracle Host | ${{ env.ORACLE_HOST }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy Path | ${{ env.DEPLOY_PATH }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployed At | $(date -u) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Services Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- kanban-proxy.service (port 3484 - header rewriting proxy)" >> $GITHUB_STEP_SUMMARY
+          echo "- kanban-server.service (port 3485 - Kanban app)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Access" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kanban Proxy (Tailscale)**: http://$(ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} 'tailscale ip -4'):3484" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kanban Server (Direct)**: http://${{ env.ORACLE_HOST }}:3485" >> $GITHUB_STEP_SUMMARY
