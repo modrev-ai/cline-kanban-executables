@@ -40,8 +40,8 @@ jobs:
       - name: Setup SSH key
         run: |
           mkdir -p $env:USERPROFILE\.ssh
-          # Use PowerShell to properly decode base64
-          $key = "${{ secrets.ORACLE_SSH_KEY }}"
+          # Use PowerShell to properly decode base64 - remove any whitespace/newlines from secret
+          $key = "${{ secrets.ORACLE_SSH_KEY }}".Replace("`n", "").Replace("`r", "").Replace(" ", "")
           $bytes = [System.Convert]::FromBase64String($key)
           [System.IO.File]::WriteAllBytes("$env:USERPROFILE\.ssh\oracle_key", $bytes)
           # Set proper permissions (read-only for current user)
