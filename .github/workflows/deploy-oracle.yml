@@ -82,6 +82,7 @@ cline --version
           [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n").Replace("`r", "`n"), [System.Text.Encoding]::UTF8)
           scp -i $env:USERPROFILE\.ssh\oracle_key $scriptPath ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-node.sh
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
+        shell: pwsh
 
       - name: Create kanban-proxy systemd service file locally
         run: |
