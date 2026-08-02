@@ -34,11 +34,13 @@ jobs:
 
       - name: Setup SSH key
         env:
-          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          ORACLE_SSH_KEY_B64: ${{ secrets.ORACLE_SSH_KEY_B64 }}
         run: |
           mkdir -p $env:USERPROFILE\.ssh
-          # Write SSH key from environment variable (preserves newlines correctly)
-          [System.IO.File]::WriteAllText("$env:USERPROFILE\.ssh\oracle_key", $env:ORACLE_SSH_KEY)
+          # Decode base64 SSH key and write to file
+          $key = $env:ORACLE_SSH_KEY_B64
+          $bytes = [System.Convert]::FromBase64String($key)
+          [System.IO.File]::WriteAllBytes("$env:USERPROFILE\.ssh\oracle_key", $bytes)
           # Set file permissions (read-only for current user)
           icacls "$env:USERPROFILE\.ssh\oracle_key" /inheritance:r /grant:r "$env:USERNAME:F"
           ssh-keyscan -H ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts
