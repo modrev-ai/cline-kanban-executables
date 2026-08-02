@@ -41,13 +41,24 @@ jobs:
         run: |
           mkdir -p $env:USERPROFILE\.ssh
           # Use PowerShell to properly decode base64 - remove any whitespace/newlines from secret
-          $key = "${{ secrets.ORACLE_SSH_KEY }}".Replace("`n", "").Replace("`r", "").Replace(" ", "")
-          $bytes = [System.Convert]::FromBase64String($key)
-          [System.IO.File]::WriteAllBytes("$env:USERPROFILE\.ssh\oracle_key", $bytes)
-          # Set proper permissions (read-only for current user)
-          icacls "$env:USERPROFILE\.ssh\oracle_key" /inheritance:r /grant:r "$env:USERNAME:R"
-          # Add host to known_hosts
-          ssh-keyscan -H ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts
+          # Also remove any non-base64 characters that might have been introduced
+          $key = "${{ secrets.ORACLE_SSH_KEY }}"
+          $key = $key -replace '[\r\n\s]', ''  # Remove all whitespace including newlines, tabs, spaces
+          $key = $key -replace '[^A-Za-z0-9+/=]', ''  # Remove any non-base64 characters
+          try {
+            $bytes = [System.Convert]::FromBase64String($key)
+            [System.IO.File]::WriteAllBytes("$env:USERPROFILE\.ssh\oracle_key", $bytes)
+            # Set proper permissions (read-only for current user)
+            icacls "$env:USERPROFILE\.ssh\oracle_key" /inheritance:r /grant:r "$env:USERNAME:R"
+            # Add host to known_hosts
+            ssh-keyscan -H ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts
+            Write-Host "SSH key setup successful"
+          } catch {
+            Write-Error "Failed to decode SSH key: $_"
+            Write-Host "Key length after cleaning: $($key.Length)"
+            Write-Host "Key preview (first 50 chars): $($key.Substring(0, [Math]::Min(50, $key.Length)))"
+            exit 1
+          }
         shell: pwsh
 
       - name: Test SSH connection
