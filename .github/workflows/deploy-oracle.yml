@@ -35,9 +35,12 @@ jobs:
       - name: Setup SSH key
         run: |
           mkdir -p $env:USERPROFILE\.ssh
-          # Decode base64 SSH key and write to file
-          echo "${{ secrets.ORACLE_SSH_KEY }}" | base64 -d > $env:USERPROFILE\.ssh\oracle_key
-          icacls $env:USERPROFILE\.ssh\oracle_key /inheritance:r /grant:r "%USERNAME%:F"
+          # Decode base64 SSH key and write to file using PowerShell
+          $key = "${{ secrets.ORACLE_SSH_KEY }}"
+          $bytes = [System.Convert]::FromBase64String($key)
+          [System.IO.File]::WriteAllBytes("$env:USERPROFILE\.ssh\oracle_key", $bytes)
+          # Set file permissions (read-only for current user)
+          icacls "$env:USERPROFILE\.ssh\oracle_key" /inheritance:r /grant:r "$env:USERNAME:F"
           ssh-keyscan -H ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts
 
       - name: Test SSH connection
