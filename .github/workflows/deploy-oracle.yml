@@ -144,15 +144,15 @@ jobs:
             'sudo git config --global url."https://github.com/".insteadOf "git@github.com:"',
             'sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"',
             '# Install http-proxy globally for kanban-proxy.js (use full path for sudo)',
-            'sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1',
-            '# Install cline globally for kanban-server from cline main branch (public repo)',
-            "sudo /usr/local/bin/npm install -g https://github.com/cline/cline.git#main --omit=optional --maxsockets=1",
+            'sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1 2>&1',
+            '# Install cline globally for kanban-server from modrev-ai/cline main branch',
+            "sudo /usr/local/bin/npm install -g https://github.com/modrev-ai/cline.git#main --omit=optional --maxsockets=1 2>&1",
             '# Create symlink for cline in /usr/bin',
             'sudo ln -sf /usr/local/bin/cline /usr/bin/cline',
             '# Verify installation using full paths',
             '/usr/local/bin/node --version',
             '/usr/local/bin/npm --version',
-            '/usr/local/bin/cline --version'
+            '/usr/local/bin/cline --version || echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline'
           )
           $scriptContent = $scriptLines -join "`n"
           # Use SSH to write script directly on remote server
