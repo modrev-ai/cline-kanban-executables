@@ -152,7 +152,7 @@ jobs:
             '# Verify installation using full paths',
             '/usr/local/bin/node --version',
             '/usr/local/bin/npm --version',
-            '/usr/local/bin/cline --version || echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline'
+            '/usr/local/bin/cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)'
           )
           $scriptContent = $scriptLines -join "`n"
           # Use SSH to write script directly on remote server
