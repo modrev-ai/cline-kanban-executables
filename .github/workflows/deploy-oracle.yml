@@ -140,6 +140,8 @@ jobs:
             'sudo /usr/local/bin/npm config set audit false',
             'sudo /usr/local/bin/npm config set fund false',
             'sudo /usr/local/bin/npm config set maxsockets 1',
+            '# Force npm to use HTTPS for git instead of SSH',
+            'sudo /usr/local/bin/npm config set git-protocol https',
             '# Install http-proxy globally for kanban-proxy.js (use full path for sudo)',
             'sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1',
             '# Install cline globally for kanban-server from modrev-ai main branch',
