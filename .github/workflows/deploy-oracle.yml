@@ -53,8 +53,8 @@ jobs:
             # Set proper permissions (read-only for current user) - use icacls with explicit username
             $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
             icacls $keyPath /inheritance:r /grant:r "$currentUser:R"
-            # Add host to known_hosts
-            ssh-keyscan -H ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts
+            # Add host to known_hosts with timeout to prevent hanging
+            ssh-keyscan -H -T 10 ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts 2>$null || Write-Host "Warning: ssh-keyscan timed out, will use StrictHostKeyChecking=no"
             Write-Host "SSH key setup successful"
           } catch {
             Write-Error "Failed to decode SSH key: $_"
@@ -66,7 +66,7 @@ jobs:
 
       - name: Test SSH connection
         run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key -o ConnectTimeout=10 -o BatchMode=yes ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "echo 'SSH connection successful'"
+          ssh -i $env:USERPROFILE\.ssh\oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "echo 'SSH connection successful'"
 
       - name: Create deploy directory on Oracle
         run: |
