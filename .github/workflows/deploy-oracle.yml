@@ -48,9 +48,11 @@ jobs:
           $key = $key -replace '[^A-Za-z0-9+/=]', ''  # Remove any non-base64 characters
           try {
             $bytes = [System.Convert]::FromBase64String($key)
-            [System.IO.File]::WriteAllBytes("$env:USERPROFILE\.ssh\oracle_key", $bytes)
-            # Set proper permissions (read-only for current user)
-            icacls "$env:USERPROFILE\.ssh\oracle_key" /inheritance:r /grant:r "$env:USERNAME:R"
+            $keyPath = "$env:USERPROFILE\.ssh\oracle_key"
+            [System.IO.File]::WriteAllBytes($keyPath, $bytes)
+            # Set proper permissions (read-only for current user) - use icacls with explicit username
+            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            icacls $keyPath /inheritance:r /grant:r "$currentUser:R"
             # Add host to known_hosts
             ssh-keyscan -H ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts
             Write-Host "SSH key setup successful"
@@ -87,22 +89,47 @@ jobs:
         run: |
           # Write bash script directly on remote server via SSH heredoc to avoid line ending issues
           $scriptLines = @(
-            '# Add swap space to prevent OOM kills on free tier instances',
+            '# Add swap space to prevent OOM kills on free tier instances (increase to 4GB)',
             'if [ ! -f /swapfile ]; then',
-            '  sudo fallocate -l 2G /swapfile',
+            '  sudo fallocate -l 4G /swapfile',
             '  sudo chmod 600 /swapfile',
             '  sudo mkswap /swapfile',
             '  sudo swapon /swapfile',
             '  echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab',
+            'else',
+            '  # Resize existing swapfile if too small',
+            '  CURRENT_SIZE=$(stat -c%s /swapfile 2>/dev/null || echo 0)',
+            '  if [ "$CURRENT_SIZE" -lt 4294967296 ]; then',
+            '    sudo swapoff /swapfile',
+            '    sudo fallocate -l 4G /swapfile',
+            '    sudo chmod 600 /swapfile',
+            '    sudo mkswap /swapfile',
+            '    sudo swapon /swapfile',
+            '  fi',
             'fi',
+            '# Install Node.js using binary tarball (much less memory than dnf)',
             'if ! command -v node &> /dev/null; then',
-            '  curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -',
-            '  sudo dnf install -y nodejs',
+            '  NODE_VERSION="20.18.0"',
+            '  ARCH="linux-x64"',
+            '  cd /tmp',
+            '  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${ARCH}.tar.xz" -o node.tar.xz',
+            '  tar -xf node.tar.xz',
+            '  sudo cp -r node-v${NODE_VERSION}-${ARCH}/bin/* /usr/local/bin/',
+            '  sudo cp -r node-v${NODE_VERSION}-${ARCH}/lib/* /usr/local/lib/',
+            '  sudo cp -r node-v${NODE_VERSION}-${ARCH}/include/* /usr/local/include/',
+            '  sudo cp -r node-v${NODE_VERSION}-${ARCH}/share/* /usr/local/share/',
+            '  rm -rf node-v${NODE_VERSION}-${ARCH} node.tar.xz',
             'fi',
+            '# Configure npm for low memory usage',
+            'npm config set prefer-offline true',
+            'npm config set audit false',
+            'npm config set fund false',
+            'npm config set optional false',
+            'npm config set maxsockets 1',
             '# Install http-proxy globally for kanban-proxy.js',
-            'sudo npm install -g http-proxy',
+            'sudo npm install -g http-proxy --no-optional --maxsockets=1',
             '# Install cline globally for kanban-server',
-            'sudo npm install -g cline',
+            'sudo npm install -g cline --no-optional --maxsockets=1',
             '# Verify installation',
             'node --version',
             'npm --version',
