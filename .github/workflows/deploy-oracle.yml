@@ -155,12 +155,10 @@ jobs:
             '/usr/local/bin/cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)'
           )
           $scriptContent = $scriptLines -join "`n"
-          # Use SSH to write script directly on remote server, then strip CR characters
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /tmp/install-node.sh << 'EOF'
+          # Use SSH to write script directly on remote server, stripping CR characters during write
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /tmp/install-node.sh << 'EOF' | tr -d '\r'
           $scriptContent
           EOF
-          # Strip Windows line endings (CRLF -> LF) in case they were introduced
-          sed -i 's/\r$//' /tmp/install-node.sh
           chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
         shell: pwsh
         env:
