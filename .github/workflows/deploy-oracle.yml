@@ -127,19 +127,20 @@ jobs:
             '  sudo cp -r node-v${NODE_VERSION}-${ARCH}/share/* /usr/local/share/',
             '  rm -rf node-v${NODE_VERSION}-${ARCH} node.tar.xz',
             'fi',
+            '# Use full paths for all node/npm commands to avoid PATH issues',
             '# Configure npm for low memory usage',
-            'npm config set prefer-offline true',
-            'npm config set audit false',
-            'npm config set fund false',
-            'npm config set maxsockets 1',
+            'sudo /usr/local/bin/npm config set prefer-offline true',
+            'sudo /usr/local/bin/npm config set audit false',
+            'sudo /usr/local/bin/npm config set fund false',
+            'sudo /usr/local/bin/npm config set maxsockets 1',
             '# Install http-proxy globally for kanban-proxy.js (use full path for sudo)',
             'sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1',
             '# Install cline globally for kanban-server (use full path for sudo)',
             'sudo /usr/local/bin/npm install -g cline --omit=optional --maxsockets=1',
-            '# Verify installation',
-            'node --version',
-            'npm --version',
-            'cline --version'
+            '# Verify installation using full paths',
+            '/usr/local/bin/node --version',
+            '/usr/local/bin/npm --version',
+            '/usr/local/bin/cline --version'
           )
           $scriptContent = $scriptLines -join "`n"
           # Use SSH to write script directly on remote server
