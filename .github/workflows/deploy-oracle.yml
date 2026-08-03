@@ -42,7 +42,8 @@ jobs:
           mkdir -p $env:USERPROFILE\.ssh
           # Use PowerShell to properly decode base64 - remove any whitespace/newlines from secret
           # Also remove any non-base64 characters that might have been introduced
-          $key = "${{ secrets.ORACLE_SSH_KEY }}"
+          # Use the environment variable ORACLE_SSH_KEY which is set from secrets.ORACLE_SSH_KEY_B64
+          $key = $env:ORACLE_SSH_KEY
           $key = $key -replace '[\r\n\s]', ''  # Remove all whitespace including newlines, tabs, spaces
           $key = $key -replace '[^A-Za-z0-9+/=]', ''  # Remove any non-base64 characters
           try {
