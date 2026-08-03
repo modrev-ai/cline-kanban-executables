@@ -143,7 +143,7 @@ jobs:
             '# Install http-proxy globally for kanban-proxy.js (use full path for sudo)',
             'sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1',
             '# Install cline globally for kanban-server from modrev-ai main branch',
-            'sudo /usr/local/bin/npm install -g git+https://github.com/modrev-ai/cline.git#main --omit=optional --maxsockets=1',
+            'sudo /usr/local/bin/npm install -g https://github.com/modrev-ai/cline.git#main --omit=optional --maxsockets=1',
             '# Create symlink for cline in /usr/bin',
             'sudo ln -sf /usr/local/bin/cline /usr/bin/cline',
             '# Verify installation using full paths',
