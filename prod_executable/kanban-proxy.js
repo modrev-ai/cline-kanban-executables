@@ -1,8 +1,20 @@
 const http = require('http');
 const path = require('path');
+const os = require('os');
 
-// Ensure global npm modules are in the module resolution path
-const globalNodeModules = path.join(process.env.APPDATA || '', 'npm', 'node_modules');
+// Ensure global npm modules are in the module resolution path (cross-platform)
+let globalNodeModules = '';
+if (process.platform === 'win32') {
+    globalNodeModules = path.join(process.env.APPDATA || '', 'npm', 'node_modules');
+} else {
+    // Linux/macOS - check common global npm locations
+    const homeDir = os.homedir();
+    globalNodeModules = path.join(homeDir, '.npm-global', 'lib', 'node_modules');
+    // Also check /usr/local/lib/node_modules as fallback
+    if (!require('fs').existsSync(globalNodeModules)) {
+        globalNodeModules = '/usr/local/lib/node_modules';
+    }
+}
 if (globalNodeModules && !module.paths.includes(globalNodeModules)) {
     module.paths.push(globalNodeModules);
 }

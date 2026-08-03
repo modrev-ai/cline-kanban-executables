@@ -1,0 +1,56 @@
+name: Validate YAML Syntax
+
+on:
+  push:
+    paths:
+      - '*.yml'
+      - '*.yaml'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - '*.yml'
+      - '*.yaml'
+      - '.github/workflows/**'
+  workflow_call:
+
+jobs:
+  validate-yaml:
+    name: Validate YAML Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Find YAML files
+        id: yaml-files
+        run: |
+          files=$(find . -name "*.yml" -o -name "*.yaml" | grep -v ".git" | sort)
+          echo "files=$files" >> $GITHUB_OUTPUT
+
+      - name: Validate YAML syntax
+        run: |
+          failed=0
+          for file in ${{ steps.yaml-files.outputs.files }}; do
+            if ! python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null; then
+              echo "ERROR: Invalid YAML syntax in $file"
+              python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>&1 | head -20
+              failed=1
+            else
+              echo "OK: $file"
+            fi
+          done
+          
+          if [ $failed -eq 1 ]; then
+            echo "YAML validation failed."
+            exit 1
+          fi
+          
+          echo "All YAML files are valid."
