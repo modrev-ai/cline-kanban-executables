@@ -145,9 +145,8 @@ jobs:
             'sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"',
             '# Install http-proxy globally for kanban-proxy.js (use full path for sudo)',
             'sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1 2>&1',
-            '# Install cline globally for kanban-server from modrev-ai/cline main branch',
-            '# URL will be constructed with token in PowerShell below',
-            'sudo /usr/local/bin/npm install -g CLINE_INSTALL_URL --omit=optional --maxsockets=1 2>&1',
+            '# Install cline globally for kanban-server from npm registry',
+            'sudo /usr/local/bin/npm install -g cline --omit=optional --maxsockets=1 2>&1',
             '# Create symlink for cline in /usr/bin',
             'sudo ln -sf /usr/local/bin/cline /usr/bin/cline',
             '# Verify installation using full paths',
@@ -156,13 +155,7 @@ jobs:
             '/usr/local/bin/cline --version || echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline'
           )
           $scriptContent = $scriptLines -join "`n"
-          # Replace placeholder with actual cline URL containing token
-          $clineUrl = "https://$($env:GH_PAT)@github.com/modrev-ai/cline.git#main"
-          Write-Host "DEBUG: GH_PAT length = $($env:GH_PAT.Length)"
-          Write-Host "DEBUG: clineUrl = $clineUrl"
-          $scriptContent = $scriptContent -replace 'CLINE_INSTALL_URL', $clineUrl
-          Write-Host "DEBUG: After replacement, script contains token: $($scriptContent -match 'github.com/modrev-ai/cline')"
-          # Use SSH to write script directly on remote server (token embedded in script)
+          # Use SSH to write script directly on remote server
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /tmp/install-node.sh << 'EOF'
           $scriptContent
           EOF
