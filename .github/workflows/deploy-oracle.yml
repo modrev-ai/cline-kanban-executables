@@ -52,9 +52,16 @@ jobs:
             [System.IO.File]::WriteAllBytes($keyPath, $bytes)
             # Set proper permissions (read-only for current user) - use icacls with explicit username
             $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-            icacls $keyPath /inheritance:r /grant:r "$currentUser:R"
-            # Add host to known_hosts with timeout to prevent hanging
-            ssh-keyscan -H -T 10 ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts 2>$null || Write-Host "Warning: ssh-keyscan timed out, will use StrictHostKeyChecking=no"
+            # Handle potential issues with username format (e.g., "DOMAIN\user" or "user@domain")
+            $safeUser = $currentUser -replace '[\\/]', '_'
+            try {
+              icacls $keyPath /inheritance:r /grant:r "$safeUser:R" 2>$null
+            } catch {
+              Write-Host "Warning: Could not set file permissions via icacls, continuing anyway"
+            }
+            # Add host to known_hosts with longer timeout to prevent hanging
+            Write-Host "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+            ssh-keyscan -H -T 30 ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts 2>$null || Write-Host "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
             Write-Host "SSH key setup successful"
           } catch {
             Write-Error "Failed to decode SSH key: $_"
