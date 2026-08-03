@@ -145,8 +145,8 @@ jobs:
             'sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"',
             '# Install http-proxy globally for kanban-proxy.js (use full path for sudo)',
             'sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1',
-            '# Install cline globally for kanban-server from modrev-ai main branch',
-            'sudo /usr/local/bin/npm install -g https://github.com/modrev-ai/cline.git#main --omit=optional --maxsockets=1',
+            '# Install cline globally for kanban-server from modrev-ai main branch (using PAT for private repo)',
+            'sudo /usr/local/bin/npm install -g https://${{ secrets.GH_PAT }}@github.com/modrev-ai/cline.git#main --omit=optional --maxsockets=1',
             '# Create symlink for cline in /usr/bin',
             'sudo ln -sf /usr/local/bin/cline /usr/bin/cline',
             '# Verify installation using full paths',
@@ -161,6 +161,8 @@ jobs:
           EOF
           chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
         shell: pwsh
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
 
       - name: Create kanban-proxy systemd service file locally
         run: |
