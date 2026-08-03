@@ -167,59 +167,59 @@ jobs:
       - name: Create kanban-proxy systemd service file locally
         run: |
           python3 << 'PYEOF'
-            import os
-            dep = os.environ.get('DEPLOY_PATH', '/home/opc/cline-kanban')
-            content = """[Unit]
-            Description=Kanban Header Rewriting Proxy
-            After=network.target
-            
-            [Service]
-            Type=simple
-            User=opc
-            WorkingDirectory={dep}/prod_executable
-            Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules
-            ExecStart=/usr/bin/node kanban-proxy.js
-            Restart=on-failure
-            RestartSec=5
-            StandardOutput=journal
-            StandardError=journal
-            
-            [Install]
-            WantedBy=multi-user.target
-            """.format(dep=dep)
-            with open('kanban-proxy.service', 'w') as f:
-                f.write(content)
-            PYEOF
+import os
+dep = os.environ.get('DEPLOY_PATH', '/home/opc/cline-kanban')
+content = """[Unit]
+Description=Kanban Header Rewriting Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory={dep}/prod_executable
+Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules
+ExecStart=/usr/bin/node kanban-proxy.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+""".format(dep=dep)
+with open('kanban-proxy.service', 'w') as f:
+    f.write(content)
+PYEOF
         shell: bash
 
       - name: Create kanban-server systemd service file locally
         run: |
           python3 << 'PYEOF'
-            import os
-            dep = os.environ.get('DEPLOY_PATH', '/home/opc/cline-kanban')
-            content = """[Unit]
-            Description=Kanban Server (Cline)
-            After=network.target
-            
-            [Service]
-            Type=simple
-            User=opc
-            WorkingDirectory={dep}
-            Environment=KANBAN_RUNTIME_HOST=127.0.0.1
-            Environment=KANBAN_RUNTIME_PORT=3485
-            Environment=NODE_ENV=production
-            ExecStart=/usr/bin/cline kanban
-            Restart=on-failure
-            RestartSec=10
-            StandardOutput=journal
-            StandardError=journal
-            
-            [Install]
-            WantedBy=multi-user.target
-            """.format(dep=dep)
-            with open('kanban-server.service', 'w') as f:
-                f.write(content)
-            PYEOF
+import os
+dep = os.environ.get('DEPLOY_PATH', '/home/opc/cline-kanban')
+content = """[Unit]
+Description=Kanban Server (Cline)
+After=network.target
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory={dep}
+Environment=KANBAN_RUNTIME_HOST=127.0.0.1
+Environment=KANBAN_RUNTIME_PORT=3485
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/cline kanban
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+""".format(dep=dep)
+with open('kanban-server.service', 'w') as f:
+    f.write(content)
+PYEOF
         shell: bash
 
       - name: Deploy systemd service files via SCP
