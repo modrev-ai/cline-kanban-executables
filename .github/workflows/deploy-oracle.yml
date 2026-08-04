@@ -230,29 +230,53 @@ jobs:
           (Get-Content "kanban-proxy.service" -Raw) -replace "`r`n", "`n" | Set-Content "kanban-proxy.service" -Encoding UTF8NoBOM -NoNewline
           (Get-Content "kanban-server.service" -Raw) -replace "`r`n", "`n" | Set-Content "kanban-server.service" -Encoding UTF8NoBOM -NoNewline
           
+          # SCP with explicit error checking
+          Write-Host "Copying service files to Oracle..."
           scp -i $env:USERPROFILE\.ssh\oracle_key kanban-proxy.service kanban-server.service ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "SCP failed to copy service files"
+            exit 1
+          }
           
           # Verify files were copied to /tmp on Oracle
+          Write-Host "Verifying files on Oracle /tmp..."
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "ls -la /tmp/kanban-*.service && cat /tmp/kanban-proxy.service && cat /tmp/kanban-server.service"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to verify service files on Oracle"
+            exit 1
+          }
           
           # Move files and run daemon-reload in same SSH session to avoid caching issues
           # Use a script file to avoid line ending issues with multi-line SSH commands
           $scriptLines = @(
             '#!/bin/bash',
             'set -e',  # Exit on any error
-            'sudo mv /tmp/kanban-proxy.service /etc/systemd/system/',
-            'sudo mv /tmp/kanban-server.service /etc/systemd/system/',
+            'echo "=== Moving service files to /etc/systemd/system/ ==="',
+            'sudo mv /tmp/kanban-proxy.service /etc/systemd/system/kanban-proxy.service',
+            'sudo mv /tmp/kanban-server.service /etc/systemd/system/kanban-server.service',
+            'echo "=== Verifying files moved ==="',
+            'ls -la /etc/systemd/system/kanban-*.service',
+            'echo "=== Running systemctl daemon-reload ==="',
             'sudo systemctl daemon-reload',
             'echo "=== Verifying unit files loaded ==="',
             'systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found after daemon-reload" && exit 1)',
-            'ls -la /etc/systemd/system/kanban-*.service',
+            'echo "=== Unit file contents ==="',
             'cat /etc/systemd/system/kanban-proxy.service',
             'cat /etc/systemd/system/kanban-server.service'
           )
           $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
           $scriptContent | Set-Content -Path "deploy-services.sh" -Encoding UTF8NoBOM -NoNewline
           scp -i $env:USERPROFILE\.ssh\oracle_key deploy-services.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/deploy-services.sh
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to copy deploy script"
+            exit 1
+          }
+          Write-Host "Running deploy script on Oracle..."
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/deploy-services.sh && /tmp/deploy-services.sh"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Deploy script failed on Oracle"
+            exit 1
+          }
           Remove-Item deploy-services.sh
         shell: pwsh
 
