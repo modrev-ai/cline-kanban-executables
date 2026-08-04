@@ -199,12 +199,12 @@ jobs:
 
       - name: Create systemd service files on Oracle
         run: |
-          cat > /tmp/create-services.sh << 'EOF'
+          cat > /tmp/create-services.sh << 'REMOTE_EOF'
           #!/bin/bash
           set -euo pipefail
           
           echo "=== Creating kanban-proxy service ==="
-          sudo -E tee /etc/systemd/system/kanban-proxy.service > /dev/null << SVC_EOF
+          sudo tee /etc/systemd/system/kanban-proxy.service > /dev/null << 'SVC_EOF'
           [Unit]
           Description=Kanban Header Rewriting Proxy
           After=network.target
@@ -225,7 +225,7 @@ jobs:
           SVC_EOF
           
           echo "=== Creating kanban-server service ==="
-          sudo -E tee /etc/systemd/system/kanban-server.service > /dev/null << SVC_EOF
+          sudo tee /etc/systemd/system/kanban-server.service > /dev/null << 'SVC_EOF'
           [Unit]
           Description=Kanban Server (Cline)
           After=network.target
@@ -260,7 +260,7 @@ jobs:
           echo "=== Service files created successfully ==="
           cat /etc/systemd/system/kanban-proxy.service
           cat /etc/systemd/system/kanban-server.service
-          EOF
+          REMOTE_EOF
           
           chmod +x /tmp/create-services.sh
           scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/create-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/create-services.sh"
