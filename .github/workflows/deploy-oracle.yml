@@ -158,8 +158,8 @@ jobs:
             '/usr/local/bin/npm --version',
             '/usr/local/bin/cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)'
           )
-          $scriptContent = $scriptLines -join "`n"
-          $scriptContent | Set-Content -Path "install-node.sh" -Encoding UTF8
+          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
+          $scriptContent | Set-Content -Path "install-node.sh" -Encoding UTF8NoBOM -NoNewline
           scp -i $env:USERPROFILE\.ssh\oracle_key install-node.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-node.sh
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
           Remove-Item install-node.sh
@@ -249,8 +249,8 @@ jobs:
             'sudo iptables -L INPUT -n | grep -E "3484|3485" || echo "No iptables rules found for ports 3484/3485"',
             'echo "Firewall configuration complete"'
           )
-          $scriptContent = $scriptLines -join "`n"
-          $scriptContent | Set-Content -Path "configure-firewall.sh" -Encoding UTF8
+          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
+          $scriptContent | Set-Content -Path "configure-firewall.sh" -Encoding UTF8NoBOM -NoNewline
           scp -i $env:USERPROFILE\.ssh\oracle_key configure-firewall.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/configure-firewall.sh
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/configure-firewall.sh && /tmp/configure-firewall.sh"
           Remove-Item configure-firewall.sh
@@ -265,8 +265,8 @@ jobs:
             'sudo systemctl enable kanban-proxy kanban-server',
             'sudo systemctl restart kanban-proxy kanban-server'
           )
-          $scriptContent = $scriptLines -join "`n"
-          $scriptContent | Set-Content -Path "reload-services.sh" -Encoding UTF8
+          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
+          $scriptContent | Set-Content -Path "reload-services.sh" -Encoding UTF8NoBOM -NoNewline
           scp -i $env:USERPROFILE\.ssh\oracle_key reload-services.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/reload-services.sh
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/reload-services.sh && /tmp/reload-services.sh"
           Remove-Item reload-services.sh
@@ -281,8 +281,8 @@ jobs:
             'systemctl status kanban-proxy --no-pager',
             'systemctl status kanban-server --no-pager'
           )
-          $scriptContent = $scriptLines -join "`n"
-          $scriptContent | Set-Content -Path "wait-services.sh" -Encoding UTF8
+          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
+          $scriptContent | Set-Content -Path "wait-services.sh" -Encoding UTF8NoBOM -NoNewline
           scp -i $env:USERPROFILE\.ssh\oracle_key wait-services.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/wait-services.sh
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/wait-services.sh && /tmp/wait-services.sh"
           Remove-Item wait-services.sh
@@ -305,8 +305,8 @@ jobs:
             'echo === Tailscale status ===',
             'tailscale status 2>/dev/null || echo Tailscale not running'
           )
-          $scriptContent = $scriptLines -join "`n"
-          $scriptContent | Set-Content -Path "check-status.sh" -Encoding UTF8
+          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
+          $scriptContent | Set-Content -Path "check-status.sh" -Encoding UTF8NoBOM -NoNewline
           scp -i $env:USERPROFILE\.ssh\oracle_key check-status.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/check-status.sh
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/check-status.sh && /tmp/check-status.sh"
           Remove-Item check-status.sh
@@ -329,8 +329,8 @@ jobs:
             'echo "=== Checking process details ==="',
             'ps aux | grep -E "kanban|cline|node" | grep -v grep'
           )
-          $scriptContent = $scriptLines -join "`n"
-          $scriptContent | Set-Content -Path "verify-local.sh" -Encoding UTF8
+          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
+          $scriptContent | Set-Content -Path "verify-local.sh" -Encoding UTF8NoBOM -NoNewline
           scp -i $env:USERPROFILE\.ssh\oracle_key verify-local.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/verify-local.sh
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/verify-local.sh && /tmp/verify-local.sh"
           Remove-Item verify-local.sh
