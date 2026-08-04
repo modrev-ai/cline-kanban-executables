@@ -169,55 +169,53 @@ jobs:
 
       - name: Create kanban-proxy systemd service file locally
         run: |
-          cat > kanban-proxy.service << 'EOF'
-          [Unit]
-          Description=Kanban Header Rewriting Proxy
-          After=network.target
+          $serviceContent = @"
+[Unit]
+Description=Kanban Header Rewriting Proxy
+After=network.target
 
-          [Service]
-          Type=simple
-          User=opc
-          WorkingDirectory=${DEPLOY_PATH}/prod_executable
-          Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules
-          ExecStart=/usr/bin/node kanban-proxy.js
-          Restart=on-failure
-          RestartSec=5
-          StandardOutput=journal
-          StandardError=journal
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=${{ env.DEPLOY_PATH }}/prod_executable
+Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules
+ExecStart=/usr/bin/node kanban-proxy.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-        shell: bash
-        env:
-          DEPLOY_PATH: ${{ env.DEPLOY_PATH }}
+[Install]
+WantedBy=multi-user.target
+"@
+          $serviceContent | Set-Content -Path "kanban-proxy.service" -Encoding UTF8NoBOM -NoNewline
+        shell: pwsh
 
       - name: Create kanban-server systemd service file locally
         run: |
-          cat > kanban-server.service << 'EOF'
-          [Unit]
-          Description=Kanban Server (Cline)
-          After=network.target
+          $serviceContent = @"
+[Unit]
+Description=Kanban Server (Cline)
+After=network.target
 
-          [Service]
-          Type=simple
-          User=opc
-          WorkingDirectory=${DEPLOY_PATH}
-          Environment=KANBAN_RUNTIME_HOST=0.0.0.0
-          Environment=KANBAN_RUNTIME_PORT=3485
-          Environment=NODE_ENV=production
-          ExecStart=/usr/bin/cline kanban
-          Restart=on-failure
-          RestartSec=10
-          StandardOutput=journal
-          StandardError=journal
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=${{ env.DEPLOY_PATH }}
+Environment=KANBAN_RUNTIME_HOST=0.0.0.0
+Environment=KANBAN_RUNTIME_PORT=3485
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/cline kanban
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
 
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-        shell: bash
-        env:
-          DEPLOY_PATH: ${{ env.DEPLOY_PATH }}
+[Install]
+WantedBy=multi-user.target
+"@
+          $serviceContent | Set-Content -Path "kanban-server.service" -Encoding UTF8NoBOM -NoNewline
+        shell: pwsh
 
       - name: Deploy systemd service files via SCP
         run: |
