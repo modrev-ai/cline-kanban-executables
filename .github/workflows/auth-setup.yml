@@ -57,8 +57,9 @@ jobs:
           echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
           ssh-keyscan -H -T 30 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
           
-          echo "ssh-key-path=~/.ssh/oracle_key" >> $GITHUB_OUTPUT
-          echo "known-hosts-path=~/.ssh/known_hosts" >> $GITHUB_OUTPUT
+          # Use absolute paths (expand ~ to $HOME)
+          echo "ssh-key-path=$HOME/.ssh/oracle_key" >> $GITHUB_OUTPUT
+          echo "known-hosts-path=$HOME/.ssh/known_hosts" >> $GITHUB_OUTPUT
           
           echo "SSH key setup successful"
 
