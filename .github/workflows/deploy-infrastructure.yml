@@ -69,7 +69,19 @@ jobs:
           set -euo pipefail
           
           echo "=== Installing system packages ==="
-          sudo dnf update -y
+          # Run dnf update in background with nohup to prevent SSH timeout
+          nohup sudo dnf update -y > /tmp/dnf-update.log 2>&1 &
+          UPDATE_PID=$!
+          echo "dnf update started in background (PID: $UPDATE_PID)"
+          
+          # Wait for update to complete with progress indication
+          while kill -0 $UPDATE_PID 2>/dev/null; do
+            echo "Waiting for dnf update to complete... (check /tmp/dnf-update.log for progress)"
+            sleep 30
+          done
+          wait $UPDATE_PID
+          echo "dnf update completed"
+          
           sudo dnf install -y git curl wget firewalld
           
           echo "=== Configuring swap (4GB) ==="
@@ -138,8 +150,8 @@ jobs:
           EOF
           
           chmod +x /tmp/install-infra.sh
-          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/install-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-infra.sh"
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/install-infra.sh && /tmp/install-infra.sh"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 /tmp/install-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-infra.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/install-infra.sh && /tmp/install-infra.sh"
           rm /tmp/install-infra.sh
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
