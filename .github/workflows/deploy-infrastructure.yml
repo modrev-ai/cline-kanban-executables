@@ -204,7 +204,7 @@ jobs:
           set -euo pipefail
           
           echo "=== Creating kanban-proxy service ==="
-          sudo -E tee /etc/systemd/system/kanban-proxy.service > /dev/null << SVC_EOF
+          cat > /tmp/kanban-proxy.service << SVC_EOF
           [Unit]
           Description=Kanban Header Rewriting Proxy
           After=network.target
@@ -223,9 +223,10 @@ jobs:
           [Install]
           WantedBy=multi-user.target
           SVC_EOF
+          sudo mv /tmp/kanban-proxy.service /etc/systemd/system/kanban-proxy.service
           
           echo "=== Creating kanban-server service ==="
-          sudo -E tee /etc/systemd/system/kanban-server.service > /dev/null << SVC_EOF
+          cat > /tmp/kanban-server.service << SVC_EOF
           [Unit]
           Description=Kanban Server (Cline)
           After=network.target
@@ -246,6 +247,7 @@ jobs:
           [Install]
           WantedBy=multi-user.target
           SVC_EOF
+          sudo mv /tmp/kanban-server.service /etc/systemd/system/kanban-server.service
           
           echo "=== Reloading systemd ==="
           sudo systemctl daemon-reload
