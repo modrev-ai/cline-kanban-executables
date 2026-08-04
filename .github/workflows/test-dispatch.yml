@@ -12,4 +12,5 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Test input: ${{ github.event.inputs.test_input }}"
+      - run: 'echo "Test input: ${{ github.event.inputs.test_input }}"'
+        shell: bash

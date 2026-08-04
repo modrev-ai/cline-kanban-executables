@@ -1,0 +1,93 @@
+name: OCI Authentication and Environment Setup
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        required: true
+    secrets:
+      ORACLE_HOST:
+        description: 'Oracle Compute instance public IP or hostname'
+        required: true
+      ORACLE_USER:
+        description: 'SSH username for Oracle instance (typically opc)'
+        required: true
+      ORACLE_SSH_KEY_B64:
+        description: 'Base64-encoded SSH private key for Oracle instance'
+        required: true
+      DEPLOY_PATH:
+        description: 'Remote deployment path on Oracle instance'
+        required: true
+    outputs:
+      ssh-key-path:
+        description: 'Path to the SSH key on the runner'
+        value: ${{ jobs.auth.outputs.ssh-key-path }}
+      known-hosts-path:
+        description: 'Path to known_hosts file'
+        value: ${{ jobs.auth.outputs.known-hosts-path }}
+
+jobs:
+  auth:
+    name: Setup SSH and Environment
+    runs-on: windows-latest
+    outputs:
+      ssh-key-path: ${{ steps.setup-ssh.outputs.ssh-key-path }}
+      known-hosts-path: ${{ steps.setup-ssh.outputs.known-hosts-path }}
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+    steps:
+      - name: Setup SSH key
+        id: setup-ssh
+        run: |
+          mkdir -p $env:USERPROFILE\.ssh
+          
+          # Use PowerShell to properly decode base64 - remove any whitespace/newlines from secret
+          $key = $env:ORACLE_SSH_KEY
+          $key = $key -replace '[\r\n\s]', ''  # Remove all whitespace including newlines, tabs, spaces
+          $key = $key -replace '[^A-Za-z0-9+/=]', ''  # Remove any non-base64 characters
+          
+          try {
+            $bytes = [System.Convert]::FromBase64String($key)
+            $keyPath = "$env:USERPROFILE\.ssh\oracle_key"
+            [System.IO.File]::WriteAllBytes($keyPath, $bytes)
+            
+            # Set proper permissions (read-only for current user)
+            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $safeUser = $currentUser -replace '[\\/]', '_'
+            try {
+              icacls $keyPath /inheritance:r /grant:r "$safeUser:R" 2>$null
+            } catch {
+              Write-Host "Warning: Could not set file permissions via icacls, continuing anyway"
+            }
+            
+            # Add host to known_hosts
+            Write-Host "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+            $knownHostsPath = "$env:USERPROFILE\.ssh\known_hosts"
+            ssh-keyscan -H -T 30 ${{ env.ORACLE_HOST }} >> $knownHostsPath 2>$null || Write-Host "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
+            
+            echo "ssh-key-path=$keyPath" >> $env:GITHUB_OUTPUT
+            echo "known-hosts-path=$knownHostsPath" >> $env:GITHUB_OUTPUT
+            
+            Write-Host "SSH key setup successful"
+          } catch {
+            Write-Error "Failed to decode SSH key: $_"
+            Write-Host "Key length after cleaning: $($key.Length)"
+            Write-Host "Key preview (first 50 chars): $($key.Substring(0, [Math]::Min(50, $key.Length)))"
+            exit 1
+          }
+        shell: pwsh
+
+      - name: Test SSH connection
+        run: |
+          ssh -i $env:USERPROFILE\.ssh\oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "echo 'SSH connection successful'"
+        shell: pwsh
+
+      - name: Create deploy directory on Oracle
+        run: |
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "mkdir -p ${{ env.DEPLOY_PATH }}/prod_executable"
+        shell: pwsh

@@ -1,0 +1,187 @@
+name: Post-Deployment Health Check
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        required: true
+      ssh-key-path:
+        description: 'Path to SSH key on runner'
+        type: string
+        required: true
+      known-hosts-path:
+        description: 'Path to known_hosts file'
+        type: string
+        required: true
+    secrets:
+      ORACLE_HOST:
+        description: 'Oracle Compute instance public IP or hostname'
+        required: true
+      ORACLE_USER:
+        description: 'SSH username for Oracle instance (typically opc)'
+        required: true
+      DEPLOY_PATH:
+        description: 'Remote deployment path on Oracle instance'
+        required: true
+
+jobs:
+  health-check:
+    name: Verify Deployment Health
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      SSH_KEY_PATH: ${{ inputs.ssh-key-path }}
+      KNOWN_HOSTS_PATH: ${{ inputs.known-hosts-path }}
+    steps:
+      - name: Check service status on Oracle
+        run: |
+          # Write bash script locally and SCP it to avoid heredoc issues
+          $scriptLines = @(
+            '#!/bin/bash',
+            'echo === kanban-proxy status ===',
+            'systemctl status kanban-proxy --no-pager -l',
+            'echo',
+            'echo === kanban-server status ===',
+            'systemctl status kanban-server --no-pager -l',
+            'echo',
+            'echo === Port status ===',
+            'ss -tlnp | grep -E ":3484|:3485"',
+            'echo',
+            'echo === Tailscale status ===',
+            'tailscale status 2>/dev/null || echo Tailscale not running'
+          )
+          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
+          $scriptContent | Set-Content -Path "check-status.sh" -Encoding UTF8NoBOM -NoNewline
+          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH check-status.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/check-status.sh
+          ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/check-status.sh && /tmp/check-status.sh"
+          Remove-Item check-status.sh
+        shell: pwsh
+
+      - name: Verify services are listening locally on Oracle
+        run: |
+          # Write bash script locally and SCP it to avoid heredoc issues
+          $scriptLines = @(
+            '#!/bin/bash',
+            'echo "=== Verifying local port bindings ==="',
+            'ss -tlnp | grep -E ":3484|:3485"',
+            'echo',
+            'echo "=== Testing local connectivity to proxy (port 3484) ==="',
+            'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 5 || echo "Failed to connect to proxy locally"',
+            'echo',
+            'echo "=== Testing local connectivity to server (port 3485) ==="',
+            'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 5 || echo "Failed to connect to server locally"',
+            'echo',
+            'echo "=== Checking process details ==="',
+            'ps aux | grep -E "kanban|cline|node" | grep -v grep'
+          )
+          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
+          $scriptContent | Set-Content -Path "verify-local.sh" -Encoding UTF8NoBOM -NoNewline
+          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH verify-local.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/verify-local.sh
+          ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/verify-local.sh && /tmp/verify-local.sh"
+          Remove-Item verify-local.sh
+        shell: pwsh
+
+      - name: Verify deployment with HTTP health checks
+        run: |
+          # Test HTTP endpoints to verify Kanban is actually accessible
+          $maxRetries = 5
+          $retryDelay = 10
+          $proxyUrl = "http://${{ env.ORACLE_HOST }}:3484"
+          $serverUrl = "http://${{ env.ORACLE_HOST }}:3485"
+          
+          Write-Host "Testing Kanban Proxy at $proxyUrl..."
+          Write-Host "Testing Kanban Server at $serverUrl..."
+          
+          $proxySuccess = $false
+          $serverSuccess = $false
+          
+          for ($i = 1; $i -le $maxRetries; $i++) {
+            Write-Host "Attempt $i of $maxRetries..."
+            
+            # Test proxy
+            if (-not $proxySuccess) {
+              try {
+                $response = Invoke-WebRequest -Uri $proxyUrl -Method GET -TimeoutSec 10 -UseBasicParsing
+                if ($response.StatusCode -eq 200) {
+                  Write-Host "[OK] Kanban Proxy responded with HTTP 200"
+                  $proxySuccess = $true
+                } else {
+                  Write-Host "[FAIL] Kanban Proxy returned HTTP $($response.StatusCode)"
+                }
+              } catch {
+                Write-Host "[FAIL] Kanban Proxy connection failed: $($_.Exception.Message)"
+              }
+            }
+            
+            # Test server
+            if (-not $serverSuccess) {
+              try {
+                $response = Invoke-WebRequest -Uri $serverUrl -Method GET -TimeoutSec 10 -UseBasicParsing
+                if ($response.StatusCode -eq 200) {
+                  Write-Host "[OK] Kanban Server responded with HTTP 200"
+                  $serverSuccess = $true
+                } else {
+                  Write-Host "[FAIL] Kanban Server returned HTTP $($response.StatusCode)"
+                }
+              } catch {
+                Write-Host "[FAIL] Kanban Server connection failed: $($_.Exception.Message)"
+              }
+            }
+            
+            if ($proxySuccess -and $serverSuccess) {
+              Write-Host "[OK] Both services are healthy!"
+              break
+            }
+            
+            if ($i -lt $maxRetries) {
+              Write-Host "Waiting $retryDelay seconds before retry..."
+              Start-Sleep -Seconds $retryDelay
+            }
+          }
+          
+          # Final verification
+          if (-not $proxySuccess) {
+            Write-Error "FAILED: Kanban Proxy (port 3484) did not respond successfully after $maxRetries attempts"
+            exit 1
+          }
+          
+          if (-not $serverSuccess) {
+            Write-Error "FAILED: Kanban Server (port 3485) did not respond successfully after $maxRetries attempts"
+            exit 1
+          }
+          
+          Write-Host "✓ Deployment verification PASSED - Both services are accessible!"
+        shell: pwsh
+
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Oracle Host | ${{ env.ORACLE_HOST }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy Path | ${{ env.DEPLOY_PATH }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployed At | $(date -u) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Services Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- kanban-proxy.service (port 3484 - header rewriting proxy)" >> $GITHUB_STEP_SUMMARY
+          echo "- kanban-server.service (port 3485 - Kanban app)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Access" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          # Get Tailscale IP if available, otherwise use direct IP
+          $tailscaleIp = ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} 'tailscale ip -4 2>/dev/null || echo ""'
+          if ($tailscaleIp) {
+            echo "- **Kanban Proxy (Tailscale)**: http://$tailscaleIp:3484" >> $GITHUB_STEP_SUMMARY
+          } else {
+            echo "- **Kanban Proxy (Direct)**: http://${{ env.ORACLE_HOST }}:3484" >> $GITHUB_STEP_SUMMARY
+          }
+          echo "- **Kanban Server (Direct)**: http://${{ env.ORACLE_HOST }}:3485" >> $GITHUB_STEP_SUMMARY
+        shell: pwsh
