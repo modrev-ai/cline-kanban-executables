@@ -204,18 +204,19 @@ jobs:
           set -euo pipefail
           
           DEPLOY_PATH="${DEPLOY_PATH}"
+          ORACLE_USER="${ORACLE_USER}"
           
           echo "=== Creating kanban-proxy service ==="
-          sudo tee /etc/systemd/system/kanban-proxy.service > /dev/null << 'SVC_EOF'
+          sudo tee /etc/systemd/system/kanban-proxy.service > /dev/null << SVC_EOF
           [Unit]
           Description=Kanban Header Rewriting Proxy
           After=network.target
           
           [Service]
           Type=simple
-          User=opc
+          User=${ORACLE_USER}
           WorkingDirectory=${DEPLOY_PATH}/prod_executable
-          Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules
+          Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
           ExecStart=/usr/bin/node kanban-proxy.js
           Restart=on-failure
           RestartSec=5
@@ -227,14 +228,14 @@ jobs:
           SVC_EOF
           
           echo "=== Creating kanban-server service ==="
-          sudo tee /etc/systemd/system/kanban-server.service > /dev/null << 'SVC_EOF'
+          sudo tee /etc/systemd/system/kanban-server.service > /dev/null << SVC_EOF
           [Unit]
           Description=Kanban Server (Cline)
           After=network.target
           
           [Service]
           Type=simple
-          User=opc
+          User=${ORACLE_USER}
           WorkingDirectory=${DEPLOY_PATH}
           Environment=KANBAN_RUNTIME_HOST=0.0.0.0
           Environment=KANBAN_RUNTIME_PORT=3485
@@ -262,7 +263,7 @@ jobs:
           
           chmod +x /tmp/create-services.sh
           scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/create-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/create-services.sh"
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' && chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' ORACLE_USER='${{ env.ORACLE_USER }}' && chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
           rm /tmp/create-services.sh
 
       - name: Enable and start services
