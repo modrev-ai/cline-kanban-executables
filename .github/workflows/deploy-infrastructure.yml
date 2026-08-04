@@ -7,6 +7,11 @@ on:
         description: 'Deployment environment'
         type: string
         required: true
+      deploy-infrastructure:
+        description: 'Deploy infrastructure (Node.js, services, firewall) before app deployment'
+        type: boolean
+        default: true
+        required: false
     secrets:
       ORACLE_HOST:
         description: 'Oracle Compute instance public IP or hostname'
@@ -34,8 +39,10 @@ jobs:
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
       ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+      DEPLOY_INFRASTRUCTURE: ${{ inputs.deploy-infrastructure }}
     steps:
       - name: Setup SSH key
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           mkdir -p ~/.ssh
           
@@ -54,15 +61,18 @@ jobs:
         env:
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
       - name: Setup SSH key permissions
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           chmod 600 ~/.ssh/oracle_key
           chmod 644 ~/.ssh/known_hosts
 
       - name: Test SSH connection
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           ssh -i ~/.ssh/oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
 
       - name: Install system packages and Node.js on Oracle
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           cat > /tmp/install-infra.sh << 'EOF'
           #!/bin/bash
@@ -157,6 +167,7 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
 
       - name: Configure firewall on Oracle
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           cat > /tmp/configure-firewall.sh << 'EOF'
           #!/bin/bash
@@ -198,6 +209,7 @@ jobs:
           rm /tmp/configure-firewall.sh
 
       - name: Create systemd service files on Oracle
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           cat > /tmp/create-services.sh << 'REMOTE_EOF'
           #!/bin/bash
@@ -271,6 +283,7 @@ jobs:
           rm /tmp/create-services.sh
 
       - name: Debug service files
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           cat > /tmp/debug-services.sh << 'EOF'
           #!/bin/bash
@@ -324,6 +337,7 @@ jobs:
           rm /tmp/debug-services.sh
 
       - name: Enable and start services
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           cat > /tmp/enable-services.sh << 'EOF'
           #!/bin/bash
@@ -341,10 +355,49 @@ jobs:
           echo "=== Starting services ==="
           sudo systemctl restart kanban-proxy kanban-server
           
-          echo "=== Verifying services started ==="
-          sleep 5
-          systemctl is-active kanban-proxy || (echo "ERROR: kanban-proxy not active" && sudo systemctl status kanban-proxy --no-pager -l && exit 1)
-          systemctl is-active kanban-server || (echo "ERROR: kanban-server not active" && sudo systemctl status kanban-server --no-pager -l && exit 1)
+          echo "=== Verifying services started (with retries) ==="
+          maxRetries=10
+          retryDelay=5
+          
+          for i in $(seq 1 $maxRetries); do
+            echo "Attempt $i of $maxRetries: Checking service status..."
+            
+            proxyActive=false
+            serverActive=false
+            
+            if systemctl is-active --quiet kanban-proxy; then
+              proxyActive=true
+            fi
+            
+            if systemctl is-active --quiet kanban-server; then
+              serverActive=true
+            fi
+            
+            if [ "$proxyActive" = true ] && [ "$serverActive" = true ]; then
+              echo "=== Both services are active ==="
+              break
+            fi
+            
+            if [ $i -lt $maxRetries ]; then
+              echo "Services not ready yet. Waiting $retryDelay seconds before retry..."
+              sleep $retryDelay
+            fi
+          done
+          
+          # Final verification
+          if ! systemctl is-active --quiet kanban-proxy; then
+            echo "ERROR: kanban-proxy not active after $maxRetries attempts" >&2
+            sudo systemctl status kanban-proxy --no-pager -l
+            journalctl -u kanban-proxy --no-pager -l -n 50
+            exit 1
+          fi
+          
+          if ! systemctl is-active --quiet kanban-server; then
+            echo "ERROR: kanban-server not active after $maxRetries attempts" >&2
+            sudo systemctl status kanban-server --no-pager -l
+            journalctl -u kanban-server --no-pager -l -n 50
+            exit 1
+          fi
           
           echo "=== Services enabled and started successfully ==="
           systemctl status kanban-proxy --no-pager -l
@@ -357,6 +410,7 @@ jobs:
           rm /tmp/enable-services.sh
 
       - name: Verify infrastructure deployment
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           cat > /tmp/verify-infra.sh << 'EOF'
           #!/bin/bash
