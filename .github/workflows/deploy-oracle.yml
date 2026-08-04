@@ -219,8 +219,22 @@ jobs:
 
       - name: Deploy systemd service files via SCP
         run: |
+          # Verify files exist locally before SCP
+          Write-Host "Checking local service files..."
+          Test-Path "kanban-proxy.service"
+          Test-Path "kanban-server.service"
+          Get-Content "kanban-proxy.service"
+          Get-Content "kanban-server.service"
+          
           scp -i $env:USERPROFILE\.ssh\oracle_key kanban-proxy.service kanban-server.service ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/
+          
+          # Verify files were copied to /tmp on Oracle
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "ls -la /tmp/kanban-*.service && cat /tmp/kanban-proxy.service && cat /tmp/kanban-server.service"
+          
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "sudo mv /tmp/kanban-proxy.service /etc/systemd/system/ && sudo mv /tmp/kanban-server.service /etc/systemd/system/"
+          
+          # Verify files are in place
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "ls -la /etc/systemd/system/kanban-*.service && cat /etc/systemd/system/kanban-proxy.service && cat /etc/systemd/system/kanban-server.service"
 
       - name: Configure firewall on Oracle
         run: |
