@@ -31,7 +31,7 @@ on:
 jobs:
   auth:
     name: Setup SSH and Environment
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     outputs:
       ssh-key-path: ${{ steps.setup-ssh.outputs.ssh-key-path }}
       known-hosts-path: ${{ steps.setup-ssh.outputs.known-hosts-path }}
@@ -44,50 +44,28 @@ jobs:
       - name: Setup SSH key
         id: setup-ssh
         run: |
-          mkdir -p $env:USERPROFILE\.ssh
+          mkdir -p ~/.ssh
           
-          # Use PowerShell to properly decode base64 - remove any whitespace/newlines from secret
-          $key = $env:ORACLE_SSH_KEY
-          $key = $key -replace '[\r\n\s]', ''  # Remove all whitespace including newlines, tabs, spaces
-          $key = $key -replace '[^A-Za-z0-9+/=]', ''  # Remove any non-base64 characters
+          # Decode base64 SSH key - remove any whitespace/newlines from secret
+          key="${ORACLE_SSH_KEY}"
+          key=$(echo "$key" | tr -d '[:space:]')
           
-          try {
-            $bytes = [System.Convert]::FromBase64String($key)
-            $keyPath = "$env:USERPROFILE\.ssh\oracle_key"
-            [System.IO.File]::WriteAllBytes($keyPath, $bytes)
-            
-            # Set proper permissions (read-only for current user)
-            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-            $safeUser = $currentUser -replace '[\\/]', '_'
-            try {
-              icacls $keyPath /inheritance:r /grant:r "$safeUser:R" 2>$null
-            } catch {
-              Write-Host "Warning: Could not set file permissions via icacls, continuing anyway"
-            }
-            
-            # Add host to known_hosts
-            Write-Host "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
-            $knownHostsPath = "$env:USERPROFILE\.ssh\known_hosts"
-            ssh-keyscan -H -T 30 ${{ env.ORACLE_HOST }} >> $knownHostsPath 2>$null || Write-Host "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
-            
-            echo "ssh-key-path=$keyPath" >> $env:GITHUB_OUTPUT
-            echo "known-hosts-path=$knownHostsPath" >> $env:GITHUB_OUTPUT
-            
-            Write-Host "SSH key setup successful"
-          } catch {
-            Write-Error "Failed to decode SSH key: $_"
-            Write-Host "Key length after cleaning: $($key.Length)"
-            Write-Host "Key preview (first 50 chars): $($key.Substring(0, [Math]::Min(50, $key.Length)))"
-            exit 1
-          }
-        shell: pwsh
+          echo "$key" | base64 -d > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          
+          # Add host to known_hosts
+          echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+          ssh-keyscan -H -T 30 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
+          
+          echo "ssh-key-path=~/.ssh/oracle_key" >> $GITHUB_OUTPUT
+          echo "known-hosts-path=~/.ssh/known_hosts" >> $GITHUB_OUTPUT
+          
+          echo "SSH key setup successful"
 
       - name: Test SSH connection
         run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "echo 'SSH connection successful'"
-        shell: pwsh
+          ssh -i ~/.ssh/oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
 
       - name: Create deploy directory on Oracle
         run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "mkdir -p ${{ env.DEPLOY_PATH }}/prod_executable"
-        shell: pwsh
+          ssh -i ~/.ssh/oracle_key "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "mkdir -p ${{ env.DEPLOY_PATH }}/prod_executable"
