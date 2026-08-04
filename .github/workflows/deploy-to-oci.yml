@@ -37,8 +37,8 @@ on:
 jobs:
   deploy:
     name: Deploy Files to OCI
-    runs-on: windows-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
@@ -46,6 +46,15 @@ jobs:
       SSH_KEY_PATH: ${{ inputs.ssh-key-path }}
       KNOWN_HOSTS_PATH: ${{ inputs.known-hosts-path }}
     steps:
+      - name: Setup SSH key permissions
+        run: |
+          chmod 600 "${{ env.SSH_KEY_PATH }}"
+          chmod 644 "${{ env.KNOWN_HOSTS_PATH }}"
+
+      - name: Test SSH connection
+        run: |
+          ssh -i "${{ env.SSH_KEY_PATH }}" -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
+
       - name: Download deployment artifacts
         uses: actions/download-artifact@v4
         with:
@@ -54,276 +63,38 @@ jobs:
 
       - name: Deploy prod_executable files via SCP
         run: |
-          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH -r deploy-staging/prod_executable/* ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/prod_executable/
-          ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x ${{ env.DEPLOY_PATH }}/prod_executable/cline-remote-launch.sh"
-        shell: pwsh
+          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" -r deploy-staging/prod_executable/* "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/prod_executable/"
+          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x ${{ env.DEPLOY_PATH }}/prod_executable/cline-remote-launch.sh"
 
       - name: Deploy start scripts via SCP
         run: |
-          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH deploy-staging/start-all.bat deploy-staging/start-all.ps1 deploy-staging/start-all-with-tailscale.bat deploy-staging/start-all-with-tailscale.ps1 ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/
-        shell: pwsh
+          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" deploy-staging/start-all.bat deploy-staging/start-all.ps1 deploy-staging/start-all-with-tailscale.bat deploy-staging/start-all-with-tailscale.ps1 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
 
       - name: Deploy README
         run: |
-          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH deploy-staging/README.md ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/
-        shell: pwsh
+          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" deploy-staging/README.md "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
 
-      - name: Install Node.js and dependencies on Oracle
+      - name: Restart services after deployment
         run: |
-          # Write bash script locally and SCP it to avoid heredoc issues
-          $scriptLines = @(
-            '#!/bin/bash',
-            '# Add swap space to prevent OOM kills on free tier instances (increase to 4GB)',
-            'if [ ! -f /swapfile ]; then',
-            '  sudo fallocate -l 4G /swapfile',
-            '  sudo chmod 600 /swapfile',
-            '  sudo mkswap /swapfile',
-            '  sudo swapon /swapfile',
-            '  echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab',
-            'else',
-            '  # Resize existing swapfile if too small',
-            '  CURRENT_SIZE=$(stat -c%s /swapfile 2>/dev/null || echo 0)',
-            '  if [ "$CURRENT_SIZE" -lt 4294967296 ]; then',
-            '    sudo swapoff /swapfile',
-            '    sudo fallocate -l 4G /swapfile',
-            '    sudo chmod 600 /swapfile',
-            '    sudo mkswap /swapfile',
-            '    sudo swapon /swapfile',
-            '  fi',
-            'fi',
-            '# Install Node.js using binary tarball (much less memory than dnf)',
-            'if ! command -v node &> /dev/null; then',
-            '  NODE_VERSION="22.14.0"',
-            '  ARCH="linux-x64"',
-            '  cd /tmp',
-            '  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${ARCH}.tar.xz" -o node.tar.xz',
-            '  tar -xf node.tar.xz',
-            '  sudo cp -r node-v${NODE_VERSION}-${ARCH}/bin/* /usr/local/bin/',
-            '  sudo cp -r node-v${NODE_VERSION}-${ARCH}/lib/* /usr/local/lib/',
-            '  sudo cp -r node-v${NODE_VERSION}-${ARCH}/include/* /usr/local/include/',
-            '  sudo cp -r node-v${NODE_VERSION}-${ARCH}/share/* /usr/local/share/',
-            '  rm -rf node-v${NODE_VERSION}-${ARCH} node.tar.xz',
-            'fi',
-            '# Install git (required for npm install from git repo)',
-            'if ! command -v git &> /dev/null; then',
-            '  sudo dnf install -y git',
-            'fi',
-            '# Create symlinks in /usr/bin for systemd services',
-            'sudo ln -sf /usr/local/bin/node /usr/bin/node',
-            'sudo ln -sf /usr/local/bin/npm /usr/bin/npm',
-            '# Use full paths for all node/npm commands to avoid PATH issues',
-            '# Configure npm for low memory usage',
-            'sudo /usr/local/bin/npm config set prefer-offline true',
-            'sudo /usr/local/bin/npm config set audit false',
-            'sudo /usr/local/bin/npm config set fund false',
-            'sudo /usr/local/bin/npm config set maxsockets 1',
-            '# Configure git to use HTTPS instead of SSH for GitHub URLs',
-            'sudo git config --global url."https://github.com/".insteadOf "git@github.com:"',
-            'sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"',
-            '# Install http-proxy globally for kanban-proxy.js (use full path for sudo)',
-            'sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1 2>&1',
-            '# Get latest cline release from modrev-ai/cline using Python (more reliable than grep in PowerShell)',
-            'CLINE_VERSION=$(python3 -c "import urllib.request, json; data = json.load(urllib.request.urlopen(\"https://api.github.com/repos/modrev-ai/cline/releases/latest\")); print(data[\"tag_name\"])")',
-            'echo "Latest cline version: $CLINE_VERSION"',
-            '# Install cline globally from modrev-ai/cline release',
-            'sudo /usr/local/bin/npm install -g "https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_VERSION}.tar.gz" --omit=optional --maxsockets=1 2>&1',
-            '# Create symlink for cline in /usr/bin',
-            'sudo ln -sf /usr/local/bin/cline /usr/bin/cline',
-            '# Verify installation using full paths',
-            '/usr/local/bin/node --version',
-            '/usr/local/bin/npm --version',
-            '/usr/local/bin/cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)'
-          )
-          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
-          $scriptContent | Set-Content -Path "install-node.sh" -Encoding UTF8NoBOM -NoNewline
-          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH install-node.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-node.sh
-          ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/install-node.sh && /tmp/install-node.sh"
-          Remove-Item install-node.sh
-        shell: pwsh
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-
-      - name: Create kanban-proxy systemd service file locally
-        run: |
-          $serviceLines = @(
-            '[Unit]',
-            'Description=Kanban Header Rewriting Proxy',
-            'After=network.target',
-            '',
-            '[Service]',
-            'Type=simple',
-            'User=opc',
-            'WorkingDirectory=${{ env.DEPLOY_PATH }}/prod_executable',
-            'Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules',
-            'ExecStart=/usr/bin/node kanban-proxy.js',
-            'Restart=on-failure',
-            'RestartSec=5',
-            'StandardOutput=journal',
-            'StandardError=journal',
-            '',
-            '[Install]',
-            'WantedBy=multi-user.target'
-          )
-          $serviceContent = $serviceLines -join "`n"
-          $serviceContent | Set-Content -Path "kanban-proxy.service" -Encoding UTF8NoBOM -NoNewline
-        shell: pwsh
-
-      - name: Create kanban-server systemd service file locally
-        run: |
-          $serviceLines = @(
-            '[Unit]',
-            'Description=Kanban Server (Cline)',
-            'After=network.target',
-            '',
-            '[Service]',
-            'Type=simple',
-            'User=opc',
-            'WorkingDirectory=${{ env.DEPLOY_PATH }}',
-            'Environment=KANBAN_RUNTIME_HOST=0.0.0.0',
-            'Environment=KANBAN_RUNTIME_PORT=3485',
-            'Environment=NODE_ENV=production',
-            'ExecStart=/usr/bin/cline kanban',
-            'Restart=on-failure',
-            'RestartSec=10',
-            'StandardOutput=journal',
-            'StandardError=journal',
-            '',
-            '[Install]',
-            'WantedBy=multi-user.target'
-          )
-          $serviceContent = $serviceLines -join "`n"
-          $serviceContent | Set-Content -Path "kanban-server.service" -Encoding UTF8NoBOM -NoNewline
-        shell: pwsh
-
-      - name: Deploy systemd service files via SCP
-        run: |
-          # Verify files exist locally before SCP
-          Write-Host "Checking local service files..."
-          Test-Path "kanban-proxy.service"
-          Test-Path "kanban-server.service"
-          Get-Content "kanban-proxy.service"
-          Get-Content "kanban-server.service"
+          cat > /tmp/restart-services.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
           
-          # Convert line endings to Unix format before SCP
-          (Get-Content "kanban-proxy.service" -Raw) -replace "`r`n", "`n" | Set-Content "kanban-proxy.service" -Encoding UTF8NoBOM -NoNewline
-          (Get-Content "kanban-server.service" -Raw) -replace "`r`n", "`n" | Set-Content "kanban-server.service" -Encoding UTF8NoBOM -NoNewline
+          echo "=== Restarting services after deployment ==="
+          sudo systemctl daemon-reload
+          sudo systemctl restart kanban-proxy kanban-server
           
-          # SCP with explicit error checking
-          Write-Host "Copying service files to Oracle..."
-          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH kanban-proxy.service kanban-server.service ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "SCP failed to copy service files"
-            exit 1
-          }
+          echo "=== Verifying services restarted ==="
+          sleep 5
+          systemctl is-active kanban-proxy || (echo "ERROR: kanban-proxy not active" && sudo systemctl status kanban-proxy --no-pager -l && exit 1)
+          systemctl is-active kanban-server || (echo "ERROR: kanban-server not active" && sudo systemctl status kanban-server --no-pager -l && exit 1)
           
-          # Verify files were copied to /tmp on Oracle
-          Write-Host "Verifying files on Oracle /tmp..."
-          ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "ls -la /tmp/kanban-*.service && cat /tmp/kanban-proxy.service && cat /tmp/kanban-server.service"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to verify service files on Oracle"
-            exit 1
-          }
+          echo "=== Services restarted successfully ==="
+          systemctl status kanban-proxy --no-pager -l
+          systemctl status kanban-server --no-pager -l
+          EOF
           
-          # Move files and run daemon-reload in same SSH session to avoid caching issues
-          # Use a script file to avoid line ending issues with multi-line SSH commands
-          $scriptLines = @(
-            '#!/bin/bash',
-            'set -e',  # Exit on any error
-            'echo "=== Moving service files to /etc/systemd/system/ ==="',
-            'sudo mv /tmp/kanban-proxy.service /etc/systemd/system/kanban-proxy.service',
-            'sudo mv /tmp/kanban-server.service /etc/systemd/system/kanban-server.service',
-            'echo "=== Verifying files moved ==="',
-            'ls -la /etc/systemd/system/kanban-*.service',
-            'echo "=== Running systemctl daemon-reload ==="',
-            'sudo systemctl daemon-reload',
-            'echo "=== Verifying unit files loaded ==="',
-            'systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found after daemon-reload" && exit 1)',
-            'echo "=== Unit file contents ==="',
-            'cat /etc/systemd/system/kanban-proxy.service',
-            'cat /etc/systemd/system/kanban-server.service'
-          )
-          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
-          $scriptContent | Set-Content -Path "deploy-services.sh" -Encoding UTF8NoBOM -NoNewline
-          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH deploy-services.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/deploy-services.sh
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to copy deploy script"
-            exit 1
-          }
-          Write-Host "Running deploy script on Oracle..."
-          ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/deploy-services.sh && /tmp/deploy-services.sh"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Deploy script failed on Oracle"
-            exit 1
-          }
-          Remove-Item deploy-services.sh
-        shell: pwsh
-
-      - name: Configure firewall on Oracle
-        run: |
-          # Write bash script locally and SCP it to avoid heredoc issues
-          $scriptLines = @(
-            '#!/bin/bash',
-            '# Configure firewalld to allow Kanban ports',
-            'if systemctl is-active --quiet firewalld; then',
-            '  sudo firewall-cmd --permanent --add-port=3484/tcp',
-            '  sudo firewall-cmd --permanent --add-port=3485/tcp',
-            '  sudo firewall-cmd --reload',
-            '  echo "firewalld configured successfully"',
-            'else',
-            '  echo "firewalld not running, using iptables"',
-            'fi',
-            '# Also configure iptables as fallback (works regardless of firewalld)',
-            'sudo iptables -I INPUT -p tcp --dport 3484 -j ACCEPT 2>/dev/null || true',
-            'sudo iptables -I INPUT -p tcp --dport 3485 -j ACCEPT 2>/dev/null || true',
-            '# Save iptables rules',
-            'sudo mkdir -p /etc/iptables',
-            'sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true',
-            '# Verify ports are open',
-            'echo "=== Checking iptables rules ==="',
-            'sudo iptables -L INPUT -n | grep -E "3484|3485" || echo "No iptables rules found for ports 3484/3485"',
-            'echo "Firewall configuration complete"'
-          )
-          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
-          $scriptContent | Set-Content -Path "configure-firewall.sh" -Encoding UTF8NoBOM -NoNewline
-          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH configure-firewall.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/configure-firewall.sh
-          ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/configure-firewall.sh && /tmp/configure-firewall.sh"
-          Remove-Item configure-firewall.sh
-        shell: pwsh
-
-      - name: Enable and start services
-        run: |
-          # Write bash script locally and SCP it to avoid heredoc issues
-          $scriptLines = @(
-            '#!/bin/bash',
-            'set -e',  # Exit on any error
-            'sudo systemctl daemon-reload',
-            'echo "=== Verifying unit files loaded before enable ==="',
-            'systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found" && exit 1)',
-            'sudo systemctl enable kanban-proxy kanban-server',
-            'sudo systemctl restart kanban-proxy kanban-server',
-            'echo "=== Verifying services started ==="',
-            'systemctl is-active kanban-proxy || (echo "ERROR: kanban-proxy not active" && exit 1)',
-            'systemctl is-active kanban-server || (echo "ERROR: kanban-server not active" && exit 1)'
-          )
-          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
-          $scriptContent | Set-Content -Path "enable-services.sh" -Encoding UTF8NoBOM -NoNewline
-          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH enable-services.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/enable-services.sh
-          ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/enable-services.sh && /tmp/enable-services.sh"
-          Remove-Item enable-services.sh
-        shell: pwsh
-
-      - name: Wait for services to start
-        run: |
-          # Write bash script locally and SCP it to avoid heredoc issues
-          $scriptLines = @(
-            '#!/bin/bash',
-            'sleep 10',
-            'systemctl status kanban-proxy --no-pager',
-            'systemctl status kanban-server --no-pager'
-          )
-          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
-          $scriptContent | Set-Content -Path "wait-services.sh" -Encoding UTF8NoBOM -NoNewline
-          scp -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH wait-services.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/wait-services.sh
-          ssh -i $env:SSH_KEY_PATH -o UserKnownHostsFile=$env:KNOWN_HOSTS_PATH ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/wait-services.sh && /tmp/wait-services.sh"
-          Remove-Item wait-services.sh
-        shell: pwsh
+          chmod +x /tmp/restart-services.sh
+          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/restart-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/restart-services.sh"
+          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/restart-services.sh && /tmp/restart-services.sh"
+          rm /tmp/restart-services.sh

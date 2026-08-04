@@ -14,6 +14,11 @@ on:
         type: boolean
         default: false
         required: false
+      deploy-infrastructure:
+        description: 'Deploy infrastructure (Node.js, services, firewall) before app deployment'
+        type: boolean
+        default: true
+        required: false
 
 jobs:
   validate-yaml:
@@ -38,9 +43,20 @@ jobs:
       environment: ${{ github.event.inputs.environment }}
     secrets: inherit
 
+  deploy-infrastructure:
+    name: Deploy Infrastructure to OCI
+    if: ${{ github.event.inputs.deploy-infrastructure }}
+    needs: auth-setup
+    uses: ./.github/workflows/deploy-infrastructure.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      ssh-key-path: ${{ needs.auth-setup.outputs.ssh-key-path }}
+      known-hosts-path: ${{ needs.auth-setup.outputs.known-hosts-path }}
+    secrets: inherit
+
   deploy-to-oci:
     name: Deploy Files to OCI
-    needs: [build-package, auth-setup]
+    needs: [build-package, auth-setup, deploy-infrastructure]
     uses: ./.github/workflows/deploy-to-oci.yml
     with:
       environment: ${{ github.event.inputs.environment }}

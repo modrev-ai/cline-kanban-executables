@@ -1,0 +1,307 @@
+name: Deploy Infrastructure to Oracle Compute
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        required: true
+      ssh-key-path:
+        description: 'Path to SSH key on runner'
+        type: string
+        required: true
+      known-hosts-path:
+        description: 'Path to known_hosts file'
+        type: string
+        required: true
+    secrets:
+      ORACLE_HOST:
+        description: 'Oracle Compute instance public IP or hostname'
+        required: true
+      ORACLE_USER:
+        description: 'SSH username for Oracle instance (typically opc)'
+        required: true
+      DEPLOY_PATH:
+        description: 'Remote deployment path on Oracle instance'
+        required: true
+      GH_PAT:
+        description: 'GitHub Personal Access Token for private repo access'
+        required: false
+
+jobs:
+  deploy-infrastructure:
+    name: Deploy Infrastructure to OCI
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      SSH_KEY_PATH: ${{ inputs.ssh-key-path }}
+      KNOWN_HOSTS_PATH: ${{ inputs.known-hosts-path }}
+    steps:
+      - name: Setup SSH key permissions
+        run: |
+          chmod 600 "${{ env.SSH_KEY_PATH }}"
+          chmod 644 "${{ env.KNOWN_HOSTS_PATH }}"
+
+      - name: Test SSH connection
+        run: |
+          ssh -i "${{ env.SSH_KEY_PATH }}" -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
+
+      - name: Install system packages and Node.js on Oracle
+        run: |
+          cat > /tmp/install-infra.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo "=== Installing system packages ==="
+          sudo dnf update -y
+          sudo dnf install -y git curl wget firewalld
+          
+          echo "=== Configuring swap (4GB) ==="
+          if [ ! -f /swapfile ]; then
+            sudo fallocate -l 4G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+          else
+            CURRENT_SIZE=$(stat -c%s /swapfile 2>/dev/null || echo 0)
+            if [ "$CURRENT_SIZE" -lt 4294967296 ]; then
+              sudo swapoff /swapfile
+              sudo fallocate -l 4G /swapfile
+              sudo chmod 600 /swapfile
+              sudo mkswap /swapfile
+              sudo swapon /swapfile
+            fi
+          fi
+          
+          echo "=== Installing Node.js 22 ==="
+          if ! command -v node &> /dev/null; then
+            NODE_VERSION="22.14.0"
+            ARCH="linux-x64"
+            cd /tmp
+            curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${ARCH}.tar.xz" -o node.tar.xz
+            tar -xf node.tar.xz
+            sudo cp -r node-v${NODE_VERSION}-${ARCH}/bin/* /usr/local/bin/
+            sudo cp -r node-v${NODE_VERSION}-${ARCH}/lib/* /usr/local/lib/
+            sudo cp -r node-v${NODE_VERSION}-${ARCH}/include/* /usr/local/include/
+            sudo cp -r node-v${NODE_VERSION}-${ARCH}/share/* /usr/local/share/
+            rm -rf node-v${NODE_VERSION}-${ARCH} node.tar.xz
+          fi
+          
+          echo "=== Creating symlinks ==="
+          sudo ln -sf /usr/local/bin/node /usr/bin/node
+          sudo ln -sf /usr/local/bin/npm /usr/bin/npm
+          
+          echo "=== Configuring npm for low memory ==="
+          sudo /usr/local/bin/npm config set prefer-offline true
+          sudo /usr/local/bin/npm config set audit false
+          sudo /usr/local/bin/npm config set fund false
+          sudo /usr/local/bin/npm config set maxsockets 1
+          
+          echo "=== Configuring git ==="
+          sudo git config --global url."https://github.com/".insteadOf "git@github.com:"
+          sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          
+          echo "=== Installing global npm packages ==="
+          sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1 2>&1
+          
+          echo "=== Installing cline from modrev-ai/cline ==="
+          CLINE_VERSION=$(python3 -c "import urllib.request, json; data = json.load(urllib.request.urlopen('https://api.github.com/repos/modrev-ai/cline/releases/latest')); print(data['tag_name'])")
+          echo "Latest cline version: $CLINE_VERSION"
+          sudo /usr/local/bin/npm install -g "https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_VERSION}.tar.gz" --omit=optional --maxsockets=1 2>&1
+          
+          echo "=== Creating cline symlink ==="
+          sudo ln -sf /usr/local/bin/cline /usr/bin/cline
+          
+          echo "=== Verifying installation ==="
+          /usr/local/bin/node --version
+          /usr/local/bin/npm --version
+          /usr/local/bin/cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
+          
+          echo "=== Infrastructure installation complete ==="
+          EOF
+          
+          chmod +x /tmp/install-infra.sh
+          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/install-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-infra.sh"
+          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/install-infra.sh && /tmp/install-infra.sh"
+          rm /tmp/install-infra.sh
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Configure firewall on Oracle
+        run: |
+          cat > /tmp/configure-firewall.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo "=== Configuring firewalld ==="
+          if systemctl is-active --quiet firewalld; then
+            sudo firewall-cmd --permanent --add-port=3484/tcp
+            sudo firewall-cmd --permanent --add-port=3485/tcp
+            sudo firewall-cmd --reload
+            echo "firewalld configured successfully"
+          else
+            echo "firewalld not running, starting and enabling..."
+            sudo systemctl enable --now firewalld
+            sudo firewall-cmd --permanent --add-port=3484/tcp
+            sudo firewall-cmd --permanent --add-port=3485/tcp
+            sudo firewall-cmd --reload
+            echo "firewalld started and configured"
+          fi
+          
+          echo "=== Configuring iptables as fallback ==="
+          sudo iptables -I INPUT -p tcp --dport 3484 -j ACCEPT 2>/dev/null || true
+          sudo iptables -I INPUT -p tcp --dport 3485 -j ACCEPT 2>/dev/null || true
+          
+          echo "=== Saving iptables rules ==="
+          sudo mkdir -p /etc/iptables
+          sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true
+          
+          echo "=== Verifying ports are open ==="
+          sudo iptables -L INPUT -n | grep -E "3484|3485" || echo "No iptables rules found for ports 3484/3485"
+          sudo firewall-cmd --list-ports | grep -E "3484|3485" || echo "No firewalld ports found"
+          
+          echo "=== Firewall configuration complete ==="
+          EOF
+          
+          chmod +x /tmp/configure-firewall.sh
+          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/configure-firewall.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/configure-firewall.sh"
+          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/configure-firewall.sh && /tmp/configure-firewall.sh"
+          rm /tmp/configure-firewall.sh
+
+      - name: Create systemd service files on Oracle
+        run: |
+          cat > /tmp/create-services.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          DEPLOY_PATH="${DEPLOY_PATH}"
+          
+          echo "=== Creating kanban-proxy service ==="
+          sudo tee /etc/systemd/system/kanban-proxy.service > /dev/null << 'SVC_EOF'
+          [Unit]
+          Description=Kanban Header Rewriting Proxy
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=opc
+          WorkingDirectory=${DEPLOY_PATH}/prod_executable
+          Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules
+          ExecStart=/usr/bin/node kanban-proxy.js
+          Restart=on-failure
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          
+          [Install]
+          WantedBy=multi-user.target
+          SVC_EOF
+          
+          echo "=== Creating kanban-server service ==="
+          sudo tee /etc/systemd/system/kanban-server.service > /dev/null << 'SVC_EOF'
+          [Unit]
+          Description=Kanban Server (Cline)
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=opc
+          WorkingDirectory=${DEPLOY_PATH}
+          Environment=KANBAN_RUNTIME_HOST=0.0.0.0
+          Environment=KANBAN_RUNTIME_PORT=3485
+          Environment=NODE_ENV=production
+          ExecStart=/usr/bin/cline kanban
+          Restart=on-failure
+          RestartSec=10
+          StandardOutput=journal
+          StandardError=journal
+          
+          [Install]
+          WantedBy=multi-user.target
+          SVC_EOF
+          
+          echo "=== Reloading systemd ==="
+          sudo systemctl daemon-reload
+          
+          echo "=== Verifying unit files loaded ==="
+          systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found after daemon-reload" && exit 1)
+          
+          echo "=== Service files created successfully ==="
+          cat /etc/systemd/system/kanban-proxy.service
+          cat /etc/systemd/system/kanban-server.service
+          EOF
+          
+          chmod +x /tmp/create-services.sh
+          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/create-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/create-services.sh"
+          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "DEPLOY_PATH='${{ env.DEPLOY_PATH }}' chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
+          rm /tmp/create-services.sh
+
+      - name: Enable and start services
+        run: |
+          cat > /tmp/enable-services.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo "=== Reloading systemd ==="
+          sudo systemctl daemon-reload
+          
+          echo "=== Verifying unit files loaded ==="
+          systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found" && exit 1)
+          
+          echo "=== Enabling services ==="
+          sudo systemctl enable kanban-proxy kanban-server
+          
+          echo "=== Starting services ==="
+          sudo systemctl restart kanban-proxy kanban-server
+          
+          echo "=== Verifying services started ==="
+          sleep 5
+          systemctl is-active kanban-proxy || (echo "ERROR: kanban-proxy not active" && sudo systemctl status kanban-proxy --no-pager -l && exit 1)
+          systemctl is-active kanban-server || (echo "ERROR: kanban-server not active" && sudo systemctl status kanban-server --no-pager -l && exit 1)
+          
+          echo "=== Services enabled and started successfully ==="
+          systemctl status kanban-proxy --no-pager -l
+          systemctl status kanban-server --no-pager -l
+          EOF
+          
+          chmod +x /tmp/enable-services.sh
+          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/enable-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/enable-services.sh"
+          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/enable-services.sh && /tmp/enable-services.sh"
+          rm /tmp/enable-services.sh
+
+      - name: Verify infrastructure deployment
+        run: |
+          cat > /tmp/verify-infra.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo "=== Verifying Node.js and npm ==="
+          node --version
+          npm --version
+          cline --version || echo "cline check failed"
+          
+          echo "=== Verifying global packages ==="
+          npm list -g http-proxy --depth=0
+          
+          echo "=== Verifying services ==="
+          systemctl is-active kanban-proxy
+          systemctl is-active kanban-server
+          
+          echo "=== Verifying ports ==="
+          ss -tlnp | grep -E ":3484|:3485"
+          
+          echo "=== Verifying firewall ==="
+          sudo firewall-cmd --list-ports | grep -E "3484|3485"
+          
+          echo "=== Infrastructure verification complete ==="
+          EOF
+          
+          chmod +x /tmp/verify-infra.sh
+          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/verify-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/verify-infra.sh"
+          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/verify-infra.sh && /tmp/verify-infra.sh"
+          rm /tmp/verify-infra.sh
