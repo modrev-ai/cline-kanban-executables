@@ -4,61 +4,83 @@ This folder contains scripts to terminate all running Kanban and Cline processes
 
 ## Scripts
 
-### `start-all.bat` (Windows Batch/CMD)
-Windows batch script for CMD/PowerShell.
+### `start-all.bat` / `start-all.ps1` (Windows Batch/PowerShell)
+Main scripts to terminate all running Kanban and Cline processes and restart them in development mode.
 
-**Usage:**
+**Usage (Batch):**
 ```cmd
-start-all.bat                    # Full restart with build
-start-all.bat --skip-build       # Fast restart without build
-start-all.bat --kanban-only      # Start only Kanban
-start-all.bat --cline-only       # Start only Cline
-start-all.bat --help             # Show help
+start\start-all.bat                    # Full restart with build
+start\start-all.bat --skip-build       # Fast restart without build
+start\start-all.bat --kanban-only      # Start only Kanban
+start\start-all.bat --cline-only       # Start only Cline
+start\start-all.bat --help             # Show help
+```
+
+**Usage (PowerShell):**
+```powershell
+.\start\start-all.ps1                  # Full restart with build
+.\start\start-all.ps1 -SkipBuild       # Fast restart without build
+.\start\start-all.ps1 -KanbanOnly      # Start only Kanban
+.\start\start-all.ps1 -ClineOnly       # Start only Cline
+.\start\start-all.ps1 -NoNewWindow     # Run in current window (sequential)
+.\start\start-all.ps1 -Help            # Show help
 ```
 
 **Examples:**
 ```cmd
 # Fast restart both (recommended for development)
-start-all.bat --skip-build
+start\start-all.bat --skip-build
 
 # Full rebuild and restart
-start-all.bat
+start\start-all.bat
 
 # Only restart Kanban
-start-all.bat --kanban-only --skip-build
+start\start-all.bat --kanban-only --skip-build
 
 # Only restart Cline
-start-all.bat --cline-only --skip-build
+start\start-all.bat --cline-only --skip-build
 ```
 
 ---
 
-### `start-all.ps1` (PowerShell)
-PowerShell script with more robust process detection and colored output.
+### `kanban-local.bat` / `kanban-local.ps1` (Standalone Kanban Only)
+Standalone executables to start **only Kanban** on localhost for quick development.
 
-**Usage:**
+**Usage (Batch):**
+```cmd
+kanban-local.bat              # Full restart with build
+kanban-local.bat --skip-build # Fast restart without build
+kanban-local.bat --help       # Show help
+```
+
+**Usage (PowerShell):**
 ```powershell
-.\start-all.ps1                  # Full restart with build
-.\start-all.ps1 -SkipBuild       # Fast restart without build
-.\start-all.ps1 -KanbanOnly      # Start only Kanban
-.\start-all.ps1 -ClineOnly       # Start only Cline
-.\start-all.ps1 -NoNewWindow     # Run in current window (sequential)
-.\start-all.ps1 -Help            # Show help
+.\kanban-local.ps1            # Full restart with build
+.\kanban-local.ps1 -SkipBuild # Fast restart without build
+.\kanban-local.ps1 -Help      # Show help
 ```
 
 **Examples:**
+```cmd
+# Fast restart Kanban only (recommended for Kanban development)
+kanban-local.bat --skip-build
+
+# Full rebuild and restart Kanban
+kanban-local.bat
+```
+
+---
+
+### `start-all-with-tailscale.bat` / `start-all-with-tailscale.ps1` (With Tailscale)
+Extended scripts that also start the header-rewriting proxy and configure Tailscale for remote access.
+
+**Usage (PowerShell):**
 ```powershell
-# Fast restart both (recommended for development)
-.\start-all.ps1 -SkipBuild
-
-# Full rebuild and restart
-.\start-all.ps1
-
-# Only restart Kanban in new window
-.\start-all.ps1 -KanbanOnly -SkipBuild
-
-# Only restart Cline in current window
-.\start-all.ps1 -ClineOnly -NoNewWindow -SkipBuild
+.\start\start-all-with-tailscale.ps1           # Full restart with all services
+.\start\start-all-with-tailscale.ps1 -SkipBuild # Fast restart
+.\start\start-all-with-tailscale.ps1 -KanbanOnly # Kanban + proxy + Tailscale only
+.\start\start-all-with-tailscale.ps1 -NoTailscale # Local only (no Tailscale serve)
+.\start\start-all-with-tailscale.ps1 -NoProxy    # Kanban + Cline only (no proxy)
 ```
 
 ---
@@ -77,13 +99,13 @@ PowerShell script with more robust process detection and colored output.
 ### From CMD:
 ```cmd
 cd c:\Workstation\cline-kanban-executables
-start-all.bat --skip-build
+start\start-all.bat --skip-build
 ```
 
 ### From PowerShell:
 ```powershell
 cd c:\Workstation\cline-kanban-executables
-.\start-all.ps1 -SkipBuild
+.\start\start-all.ps1 -SkipBuild
 ```
 
 ---
@@ -108,12 +130,12 @@ Expected output:
 Run from the correct directory:
 ```cmd
 cd c:\Workstation\cline-kanban-executables
-start-all.bat --skip-build
+start\start-all.bat --skip-build
 ```
 
 ### PowerShell execution policy error
 ```powershell
-powershell -ExecutionPolicy Bypass -File c:\Workstation\cline-kanban-executables\start-all.ps1 -SkipBuild
+powershell -ExecutionPolicy Bypass -File c:\Workstation\cline-kanban-executables\start\start-all.ps1 -SkipBuild
 ```
 
 ### Processes not terminating
@@ -157,12 +179,12 @@ Run the setup script to configure GitHub repository secrets:
 
 ```powershell
 # Windows PowerShell
-.\setup-github-secrets.ps1
+.\scripts\setup\setup-github-secrets.ps1
 ```
 
 ```bash
 # Linux/macOS/Git Bash
-./setup-github-secrets.sh
+./scripts/setup/setup-github-secrets.sh
 ```
 
 This configures the following secrets:
@@ -233,4 +255,97 @@ Install Tailscale on Oracle:
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
+```
+
+---
+
+## Project Structure
+
+```
+cline-kanban-executables/
+├── .github/workflows/          # GitHub Actions CI/CD workflows
+│   ├── deploy-oracle.yml       # Main deployment workflow
+│   ├── validate-yaml.yml       # YAML syntax validation
+│   ├── build-package.yml       # Build and package artifacts
+│   ├── auth-setup.yml          # SSH auth & environment prep
+│   ├── deploy-to-oci.yml       # Deploy to Oracle Compute
+│   ├── health-check.yml        # Post-deployment verification
+│   └── test-dispatch.yml       # Test workflow (development)
+├── deploy/                     # Deployment configurations
+│   ├── deploy-oracle.yml       # Legacy deployment workflow
+│   └── install-oci.ps1         # OCI installation script
+├── docs/                       # Documentation
+│   ├── ORACLE_DEPLOYMENT.md    # Oracle Cloud deployment guide
+│   ├── ORACLE_DEPLOYMENT_COMPLETE.md  # Complete deployment notes
+│   ├── WORKFLOW.md             # CI/CD pipeline documentation
+│   ├── YAML_VALIDATION.md      # YAML validation details
+│   └── ORGANIZATION_PLAN.md    # Project organization plan (moved here)
+├── prod_executable/            # Production executables (deployed to Oracle)
+│   ├── cline-remote-launch.ps1 # Windows remote launch script
+│   ├── cline-remote-launch.sh  # Linux/macOS remote launch script
+│   └── kanban-proxy.js         # Header rewriting proxy server
+├── scripts/                    # Utility scripts
+│   ├── generators/             # Code generators
+│   ├── writers/                # File writers
+│   └── setup/                  # Setup & configuration scripts
+│       ├── setup-github-secrets.ps1  # GitHub secrets setup (Windows)
+│       ├── setup-github-secrets.sh   # GitHub secrets setup (Linux/macOS)
+│       └── setup.sh            # Oracle Cloud Free Tier setup
+├── server/                     # Server application
+│   ├── index.js                # Main server entry point
+│   └── db/                     # Database files
+├── server_init/                # Server initialization
+│   └── GITHUB_SERVER_SETUP.md  # GitHub server setup guide
+├── start/                      # Start scripts for local development
+│   ├── start-all.bat           # Windows batch start script
+│   ├── start-all.ps1           # PowerShell start script
+│   ├── start-all-with-tailscale.bat  # With Tailscale (Windows)
+│   └── start-all-with-tailscale.ps1  # With Tailscale (PowerShell)
+├── kanban-local.bat            # Standalone Kanban startup (Windows)
+├── kanban-local.ps1            # Standalone Kanban startup (PowerShell)
+├── package.json                # Node.js package configuration
+└── README.md                   # This file
+```
+
+---
+
+## Documentation
+
+For detailed documentation, see the [`docs/`](docs/) folder:
+
+| Document | Description |
+|----------|-------------|
+| [WORKFLOW.md](docs/WORKFLOW.md) | Complete CI/CD pipeline documentation |
+| [ORACLE_DEPLOYMENT.md](docs/ORACLE_DEPLOYMENT.md) | Oracle Cloud Free Tier deployment guide |
+| [ORACLE_DEPLOYMENT_COMPLETE.md](docs/ORACLE_DEPLOYMENT_COMPLETE.md) | Complete deployment notes |
+| [YAML_VALIDATION.md](docs/YAML_VALIDATION.md) | YAML validation details |
+| [ORGANIZATION_PLAN.md](docs/ORGANIZATION_PLAN.md) | Project organization plan |
+| [server_init/GITHUB_SERVER_SETUP.md](server_init/GITHUB_SERVER_SETUP.md) | GitHub server setup instructions |
+
+---
+
+## Setup Scripts
+
+The [`scripts/setup/`](scripts/setup/) folder contains utility scripts for initial configuration:
+
+| Script | Platform | Purpose |
+|--------|----------|---------|
+| `setup-github-secrets.ps1` | Windows PowerShell | Configure GitHub repository secrets for Oracle deployment |
+| `setup-github-secrets.sh` | Linux/macOS/Git Bash | Configure GitHub repository secrets for Oracle deployment |
+| `setup.sh` | Linux (Ubuntu) | Full Oracle Cloud Free Tier instance setup (Node.js, Tailscale, PM2, etc.) |
+
+**Usage:**
+```powershell
+# Windows - Configure GitHub secrets
+.\scripts\setup\setup-github-secrets.ps1
+```
+
+```bash
+# Linux/macOS - Configure GitHub secrets
+./scripts/setup/setup-github-secrets.sh
+```
+
+```bash
+# On Oracle instance - Full server setup
+./scripts/setup/setup.sh
 ```
