@@ -277,6 +277,78 @@ jobs:
           chmod +x /tmp/check-status.sh && /tmp/check-status.sh"
         shell: pwsh
 
+      - name: Verify deployment with HTTP health checks
+        run: |
+          # Test HTTP endpoints to verify Kanban is actually accessible
+          $maxRetries = 5
+          $retryDelay = 10
+          $proxyUrl = "http://${{ env.ORACLE_HOST }}:3484"
+          $serverUrl = "http://${{ env.ORACLE_HOST }}:3485"
+          
+          Write-Host "Testing Kanban Proxy at $proxyUrl..."
+          Write-Host "Testing Kanban Server at $serverUrl..."
+          
+          $proxySuccess = $false
+          $serverSuccess = $false
+          
+          for ($i = 1; $i -le $maxRetries; $i++) {
+            Write-Host "Attempt $i of $maxRetries..."
+            
+            # Test proxy
+            if (-not $proxySuccess) {
+              try {
+                $response = Invoke-WebRequest -Uri $proxyUrl -Method GET -TimeoutSec 10 -UseBasicParsing
+                if ($response.StatusCode -eq 200) {
+                  Write-Host "✓ Kanban Proxy responded with HTTP 200"
+                  $proxySuccess = $true
+                } else {
+                  Write-Host "✗ Kanban Proxy returned HTTP $($response.StatusCode)"
+                }
+              } catch {
+                Write-Host "✗ Kanban Proxy connection failed: $($_.Exception.Message)"
+              }
+            }
+            
+            # Test server
+            if (-not $serverSuccess) {
+              try {
+                $response = Invoke-WebRequest -Uri $serverUrl -Method GET -TimeoutSec 10 -UseBasicParsing
+                if ($response.StatusCode -eq 200) {
+                  Write-Host "✓ Kanban Server responded with HTTP 200"
+                  $serverSuccess = $true
+                } else {
+                  Write-Host "✗ Kanban Server returned HTTP $($response.StatusCode)"
+                }
+              } catch {
+                Write-Host "✗ Kanban Server connection failed: $($_.Exception.Message)"
+              }
+            }
+            
+            if ($proxySuccess -and $serverSuccess) {
+              Write-Host "✓ Both services are healthy!"
+              break
+            }
+            
+            if ($i -lt $maxRetries) {
+              Write-Host "Waiting $retryDelay seconds before retry..."
+              Start-Sleep -Seconds $retryDelay
+            }
+          }
+          
+          # Final verification
+          if (-not $proxySuccess) {
+            Write-Error "FAILED: Kanban Proxy (port 3484) did not respond successfully after $maxRetries attempts"
+            exit 1
+          }
+          
+          if (-not $serverSuccess) {
+            Write-Error "FAILED: Kanban Server (port 3485) did not respond successfully after $maxRetries attempts"
+            exit 1
+          }
+          
+          Write-Host "✓ Deployment verification PASSED - Both services are accessible!"
+        shell: pwsh
+
       - name: Deployment summary
         run: |
           echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
