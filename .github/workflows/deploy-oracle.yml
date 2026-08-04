@@ -239,9 +239,12 @@ jobs:
           # Use a script file to avoid line ending issues with multi-line SSH commands
           $scriptLines = @(
             '#!/bin/bash',
+            'set -e',  # Exit on any error
             'sudo mv /tmp/kanban-proxy.service /etc/systemd/system/',
             'sudo mv /tmp/kanban-server.service /etc/systemd/system/',
             'sudo systemctl daemon-reload',
+            'echo "=== Verifying unit files loaded ==="',
+            'systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found after daemon-reload" && exit 1)',
             'ls -la /etc/systemd/system/kanban-*.service',
             'cat /etc/systemd/system/kanban-proxy.service',
             'cat /etc/systemd/system/kanban-server.service'
@@ -290,8 +293,15 @@ jobs:
           # Write bash script locally and SCP it to avoid heredoc issues
           $scriptLines = @(
             '#!/bin/bash',
+            'set -e',  # Exit on any error
+            'sudo systemctl daemon-reload',
+            'echo "=== Verifying unit files loaded before enable ==="',
+            'systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found" && exit 1)',
             'sudo systemctl enable kanban-proxy kanban-server',
-            'sudo systemctl restart kanban-proxy kanban-server'
+            'sudo systemctl restart kanban-proxy kanban-server',
+            'echo "=== Verifying services started ==="',
+            'systemctl is-active kanban-proxy || (echo "ERROR: kanban-proxy not active" && exit 1)',
+            'systemctl is-active kanban-server || (echo "ERROR: kanban-server not active" && exit 1)'
           )
           $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
           $scriptContent | Set-Content -Path "enable-services.sh" -Encoding UTF8NoBOM -NoNewline
