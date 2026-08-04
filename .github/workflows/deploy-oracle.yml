@@ -236,14 +236,22 @@ jobs:
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "ls -la /tmp/kanban-*.service && cat /tmp/kanban-proxy.service && cat /tmp/kanban-server.service"
           
           # Move files and run daemon-reload in same SSH session to avoid caching issues
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
-            sudo mv /tmp/kanban-proxy.service /etc/systemd/system/ &&
-            sudo mv /tmp/kanban-server.service /etc/systemd/system/ &&
-            sudo systemctl daemon-reload &&
-            ls -la /etc/systemd/system/kanban-*.service &&
-            cat /etc/systemd/system/kanban-proxy.service &&
-            cat /etc/systemd/system/kanban-server.service
-          "
+          # Use a script file to avoid line ending issues with multi-line SSH commands
+          $scriptLines = @(
+            '#!/bin/bash',
+            'sudo mv /tmp/kanban-proxy.service /etc/systemd/system/',
+            'sudo mv /tmp/kanban-server.service /etc/systemd/system/',
+            'sudo systemctl daemon-reload',
+            'ls -la /etc/systemd/system/kanban-*.service',
+            'cat /etc/systemd/system/kanban-proxy.service',
+            'cat /etc/systemd/system/kanban-server.service'
+          )
+          $scriptContent = ($scriptLines -join "`n") -replace "`r`n", "`n" -replace "`r", "`n"
+          $scriptContent | Set-Content -Path "deploy-services.sh" -Encoding UTF8NoBOM -NoNewline
+          scp -i $env:USERPROFILE\.ssh\oracle_key deploy-services.sh ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/deploy-services.sh
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x /tmp/deploy-services.sh && /tmp/deploy-services.sh"
+          Remove-Item deploy-services.sh
+        shell: pwsh
 
       - name: Configure firewall on Oracle
         run: |
