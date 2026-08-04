@@ -247,6 +247,9 @@ jobs:
           WantedBy=multi-user.target
           SVC_EOF
           
+          echo "=== Fixing SELinux context for service files ==="
+          sudo restorecon -v /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service
+          
           echo "=== Reloading systemd ==="
           sudo systemctl daemon-reload
           
