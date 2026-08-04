@@ -262,7 +262,7 @@ jobs:
           
           chmod +x /tmp/create-services.sh
           scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/create-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/create-services.sh"
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "DEPLOY_PATH='${{ env.DEPLOY_PATH }}' chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' && chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
           rm /tmp/create-services.sh
 
       - name: Enable and start services
