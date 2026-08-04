@@ -224,6 +224,28 @@ jobs:
           scp -i $env:USERPROFILE\.ssh\oracle_key kanban-proxy.service kanban-server.service ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/
           ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "sudo mv /tmp/kanban-proxy.service /etc/systemd/system/ && sudo mv /tmp/kanban-server.service /etc/systemd/system/"
 
+      - name: Configure firewall on Oracle
+        run: |
+          # Write commands directly on remote server via SSH heredoc to avoid line ending issues
+          $commands = @(
+            '# Configure firewalld to allow Kanban ports',
+            'sudo firewall-cmd --permanent --add-port=3484/tcp 2>/dev/null || echo "firewalld not available, trying iptables"',
+            'sudo firewall-cmd --permanent --add-port=3485/tcp 2>/dev/null || true',
+            'sudo firewall-cmd --reload 2>/dev/null || true',
+            '# Also configure iptables as fallback',
+            'sudo iptables -I INPUT -p tcp --dport 3484 -j ACCEPT 2>/dev/null || true',
+            'sudo iptables -I INPUT -p tcp --dport 3485 -j ACCEPT 2>/dev/null || true',
+            '# Save iptables rules',
+            'sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true',
+            'echo "Firewall configuration complete"'
+          )
+          $commandContent = $commands -join "`n"
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /tmp/configure-firewall.sh << 'EOF' | tr -d '\r'
+          $commandContent
+          EOF
+          chmod +x /tmp/configure-firewall.sh && /tmp/configure-firewall.sh"
+        shell: pwsh
+
       - name: Reload systemd and enable services
         run: |
           # Write commands directly on remote server via SSH heredoc to avoid line ending issues
