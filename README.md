@@ -268,7 +268,6 @@ cline-kanban-executables/
 │   ├── start-all.ps1           # PowerShell start script
 │   ├── start-all-with-tailscale.bat  # With Tailscale (Windows)
 │   └── start-all-with-tailscale.ps1  # With Tailscale (PowerShell)
-├── package.json                # Node.js package configuration
 └── README.md                   # This file
 ```
 
@@ -285,7 +284,6 @@ For detailed documentation, see the [`docs/`](docs/) folder:
 | [ORACLE_DEPLOYMENT_COMPLETE.md](docs/ORACLE_DEPLOYMENT_COMPLETE.md) | Complete deployment notes |
 | [YAML_VALIDATION.md](docs/YAML_VALIDATION.md) | YAML validation details |
 | [ORGANIZATION_PLAN.md](docs/ORGANIZATION_PLAN.md) | Project organization plan |
-| [server_init/GITHUB_SERVER_SETUP.md](server_init/GITHUB_SERVER_SETUP.md) | GitHub server setup instructions |
 
 ---
 
