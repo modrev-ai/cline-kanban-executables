@@ -41,35 +41,7 @@ start\start-all.bat --kanban-only --skip-build
 start\start-all.bat --cline-only --skip-build
 ```
 
----
 
-### `kanban-local.bat` / `kanban-local.ps1` (Standalone Kanban Only)
-Standalone executables to start **only Kanban** on localhost for quick development.
-
-**Usage (Batch):**
-```cmd
-kanban-local.bat              # Full restart with build
-kanban-local.bat --skip-build # Fast restart without build
-kanban-local.bat --help       # Show help
-```
-
-**Usage (PowerShell):**
-```powershell
-.\kanban-local.ps1            # Full restart with build
-.\kanban-local.ps1 -SkipBuild # Fast restart without build
-.\kanban-local.ps1 -Help      # Show help
-```
-
-**Examples:**
-```cmd
-# Fast restart Kanban only (recommended for Kanban development)
-kanban-local.bat --skip-build
-
-# Full rebuild and restart Kanban
-kanban-local.bat
-```
-
----
 
 ### `start-all-with-tailscale.bat` / `start-all-with-tailscale.ps1` (With Tailscale)
 Extended scripts that also start the header-rewriting proxy and configure Tailscale for remote access.
@@ -301,8 +273,6 @@ cline-kanban-executables/
 │   ├── start-all.ps1           # PowerShell start script
 │   ├── start-all-with-tailscale.bat  # With Tailscale (Windows)
 │   └── start-all-with-tailscale.ps1  # With Tailscale (PowerShell)
-├── kanban-local.bat            # Standalone Kanban startup (Windows)
-├── kanban-local.ps1            # Standalone Kanban startup (PowerShell)
 ├── package.json                # Node.js package configuration
 └── README.md                   # This file
 ```
