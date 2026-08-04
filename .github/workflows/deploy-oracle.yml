@@ -16,178 +16,44 @@ on:
         required: false
 
 jobs:
-  deploy:
-    name: Deploy to Oracle Compute
-    runs-on: windows-latest
-    environment: ${{ github.event.inputs.environment }}
-    timeout-minutes: 30
+  validate-yaml:
+    name: Validate YAML Syntax
+    uses: ./.github/workflows/validate-yaml.yml
+    secrets: inherit
 
-    env:
-      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
-      ORACLE_USER: ${{ secrets.ORACLE_USER }}
-      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
-      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+  build-package:
+    name: Build and Package Artifacts
+    needs: validate-yaml
+    uses: ./.github/workflows/build-package.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      force: ${{ github.event.inputs.force }}
+    secrets: inherit
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  auth-setup:
+    name: Setup SSH and Environment
+    needs: validate-yaml
+    uses: ./.github/workflows/auth-setup.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+    secrets: inherit
 
-      - name: Setup SSH key
-        run: |
-          mkdir -p $env:USERPROFILE\.ssh
-          echo "${{ secrets.ORACLE_SSH_KEY }}" | base64 -d > $env:USERPROFILE\.ssh\oracle_key
-          icacls $env:USERPROFILE\.ssh\oracle_key /inheritance:r /grant:r "%USERNAME%:F"
-          ssh-keyscan -H ${{ env.ORACLE_HOST }} >> $env:USERPROFILE\.ssh\known_hosts
+  deploy-to-oci:
+    name: Deploy Files to OCI
+    needs: [build-package, auth-setup]
+    uses: ./.github/workflows/deploy-to-oci.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      ssh-key-path: ${{ needs.auth-setup.outputs.ssh-key-path }}
+      known-hosts-path: ${{ needs.auth-setup.outputs.known-hosts-path }}
+    secrets: inherit
 
-      - name: Test SSH connection
-        run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key -o ConnectTimeout=10 -o BatchMode=yes ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "echo 'SSH connection successful'"
-
-      - name: Create deploy directory on Oracle
-        run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "mkdir -p ${{ env.DEPLOY_PATH }}/prod_executable"
-
-      - name: Deploy prod_executable files via SCP
-        run: |
-          scp -i $env:USERPROFILE\.ssh\oracle_key -r prod_executable/* ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/prod_executable/
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "chmod +x ${{ env.DEPLOY_PATH }}/prod_executable/cline-remote-launch.sh"
-
-      - name: Deploy start scripts via SCP
-        run: |
-          scp -i $env:USERPROFILE\.ssh\oracle_key start/start-all.bat start/start-all.ps1 start/start-all-with-tailscale.bat start/start-all-with-tailscale.ps1 ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/
-
-      - name: Deploy README
-        run: |
-          scp -i $env:USERPROFILE\.ssh\oracle_key README.md ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/
-
-      - name: Install Node.js and dependencies on Oracle
-        run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
-            # Install Node.js 20 if not present
-            if ! command -v node &> /dev/null; then
-              curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
-              sudo dnf install -y nodejs
-            fi
-            # Install http-proxy globally for kanban-proxy.js
-            sudo npm install -g http-proxy
-            # Install cline globally for kanban-server
-            sudo npm install -g cline
-            # Verify installation
-            node --version
-            npm --version
-            cline --version
-          "
-
-      - name: Create kanban-proxy systemd service file locally
-        run: |
-          python3 << 'PYEOF'
-            import os
-            dep = os.environ.get('DEPLOY_PATH', '/home/opc/cline-kanban')
-            content = """[Unit]
-            Description=Kanban Header Rewriting Proxy
-            After=network.target
-            
-            [Service]
-            Type=simple
-            User=opc
-            WorkingDirectory={dep}/prod_executable
-            Environment=NODE_PATH=/home/opc/.npm-global/lib/node_modules:/usr/local/lib/node_modules
-            ExecStart=/usr/bin/node kanban-proxy.js
-            Restart=on-failure
-            RestartSec=5
-            StandardOutput=journal
-            StandardError=journal
-            
-            [Install]
-            WantedBy=multi-user.target
-            """.format(dep=dep)
-            with open('kanban-proxy.service', 'w') as f:
-                f.write(content)
-            PYEOF
-
-      - name: Create kanban-server systemd service file locally
-        run: |
-          python3 << 'PYEOF'
-            import os
-            dep = os.environ.get('DEPLOY_PATH', '/home/opc/cline-kanban')
-            content = """[Unit]
-            Description=Kanban Server (Cline)
-            After=network.target
-            
-            [Service]
-            Type=simple
-            User=opc
-            WorkingDirectory={dep}
-            Environment=KANBAN_RUNTIME_HOST=127.0.0.1
-            Environment=KANBAN_RUNTIME_PORT=3485
-            Environment=NODE_ENV=production
-            ExecStart=/usr/bin/cline kanban
-            Restart=on-failure
-            RestartSec=10
-            StandardOutput=journal
-            StandardError=journal
-            
-            [Install]
-            WantedBy=multi-user.target
-            """.format(dep=dep)
-            with open('kanban-server.service', 'w') as f:
-                f.write(content)
-            PYEOF
-
-      - name: Deploy systemd service files via SCP
-        run: |
-          scp -i $env:USERPROFILE\.ssh\oracle_key kanban-proxy.service kanban-server.service ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "sudo mv /tmp/kanban-proxy.service /etc/systemd/system/ && sudo mv /tmp/kanban-server.service /etc/systemd/system/"
-
-      - name: Reload systemd and enable services
-        run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
-            sudo systemctl daemon-reload &&
-            sudo systemctl enable kanban-proxy kanban-server &&
-            sudo systemctl restart kanban-proxy kanban-server
-          "
-
-      - name: Wait for services to start
-        run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
-            sleep 10 &&
-            systemctl status kanban-proxy --no-pager &&
-            systemctl status kanban-server --no-pager
-          "
-
-      - name: Check service status
-        run: |
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "
-            echo '=== kanban-proxy status ===' &&
-            systemctl status kanban-proxy --no-pager -l &&
-            echo '' &&
-            echo '=== kanban-server status ===' &&
-            systemctl status kanban-server --no-pager -l &&
-            echo '' &&
-            echo '=== Port status ===' &&
-            ss -tlnp | grep -E ':3484|:3485' &&
-            echo '' &&
-            echo '=== Tailscale status ===' &&
-            tailscale status 2>/dev/null || echo 'Tailscale not running'
-          "
-
-      - name: Deployment summary
-        run: |
-          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Environment | ${{ github.event.inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Oracle Host | ${{ env.ORACLE_HOST }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deploy Path | ${{ env.DEPLOY_PATH }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deployed At | $(date -u) |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Services Deployed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- kanban-proxy.service (port 3484 - header rewriting proxy)" >> $GITHUB_STEP_SUMMARY
-          echo "- kanban-server.service (port 3485 - Kanban app)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Access" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Kanban Proxy (Tailscale)**: http://$(ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} 'tailscale ip -4'):3484" >> $GITHUB_STEP_SUMMARY
-          echo "- **Kanban Server (Direct)**: http://${{ env.ORACLE_HOST }}:3485" >> $GITHUB_STEP_SUMMARY
+  health-check:
+    name: Verify Deployment Health
+    needs: deploy-to-oci
+    uses: ./.github/workflows/health-check.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      ssh-key-path: ${{ needs.auth-setup.outputs.ssh-key-path }}
+      known-hosts-path: ${{ needs.auth-setup.outputs.known-hosts-path }}
+    secrets: inherit
