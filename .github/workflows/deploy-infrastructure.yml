@@ -204,7 +204,7 @@ jobs:
           set -euo pipefail
           
           echo "=== Creating kanban-proxy service ==="
-          sudo tee /etc/systemd/system/kanban-proxy.service > /dev/null << SVC_EOF
+          sudo -E tee /etc/systemd/system/kanban-proxy.service > /dev/null << SVC_EOF
           [Unit]
           Description=Kanban Header Rewriting Proxy
           After=network.target
@@ -225,7 +225,7 @@ jobs:
           SVC_EOF
           
           echo "=== Creating kanban-server service ==="
-          sudo tee /etc/systemd/system/kanban-server.service > /dev/null << SVC_EOF
+          sudo -E tee /etc/systemd/system/kanban-server.service > /dev/null << SVC_EOF
           [Unit]
           Description=Kanban Server (Cline)
           After=network.target
