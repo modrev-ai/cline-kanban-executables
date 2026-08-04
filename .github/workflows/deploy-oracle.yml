@@ -229,20 +229,29 @@ jobs:
           # Write commands directly on remote server via SSH heredoc to avoid line ending issues
           $commands = @(
             '# Configure firewalld to allow Kanban ports',
-            'sudo firewall-cmd --permanent --add-port=3484/tcp 2>/dev/null || echo "firewalld not available, trying iptables"',
-            'sudo firewall-cmd --permanent --add-port=3485/tcp 2>/dev/null || true',
-            'sudo firewall-cmd --reload 2>/dev/null || true',
-            '# Also configure iptables as fallback',
+            'if systemctl is-active --quiet firewalld; then',
+            '  sudo firewall-cmd --permanent --add-port=3484/tcp',
+            '  sudo firewall-cmd --permanent --add-port=3485/tcp',
+            '  sudo firewall-cmd --reload',
+            '  echo "firewalld configured successfully"',
+            'else',
+            '  echo "firewalld not running, using iptables"',
+            'fi',
+            '# Also configure iptables as fallback (works regardless of firewalld)',
             'sudo iptables -I INPUT -p tcp --dport 3484 -j ACCEPT 2>/dev/null || true',
             'sudo iptables -I INPUT -p tcp --dport 3485 -j ACCEPT 2>/dev/null || true',
             '# Save iptables rules',
+            'sudo mkdir -p /etc/iptables',
             'sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true',
+            '# Verify ports are open',
+            'echo "=== Checking iptables rules ==="',
+            'sudo iptables -L INPUT -n | grep -E "3484|3485" || echo "No iptables rules found for ports 3484/3485"',
             'echo "Firewall configuration complete"'
           )
           $commandContent = $commands -join "`n"
-          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /tmp/configure-firewall.sh << 'EOF' | tr -d '\r'
-          $commandContent
-          EOF
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /tmp/configure-firewall.sh << 'ENDOFSCRIPT'
+$commandContent
+ENDOFSCRIPT
           chmod +x /tmp/configure-firewall.sh && /tmp/configure-firewall.sh"
         shell: pwsh
 
@@ -297,6 +306,29 @@ jobs:
           $commandContent
           EOF
           chmod +x /tmp/check-status.sh && /tmp/check-status.sh"
+        shell: pwsh
+
+      - name: Verify services are listening locally on Oracle
+        run: |
+          # Verify the services are actually listening on the correct ports locally
+          $commands = @(
+            'echo "=== Verifying local port bindings ==="',
+            'ss -tlnp | grep -E ":3484|:3485"',
+            'echo',
+            'echo "=== Testing local connectivity to proxy (port 3484) ==="',
+            'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 5 || echo "Failed to connect to proxy locally"',
+            'echo',
+            'echo "=== Testing local connectivity to server (port 3485) ==="',
+            'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 5 || echo "Failed to connect to server locally"',
+            'echo',
+            'echo "=== Checking process details ==="',
+            'ps aux | grep -E "kanban|cline|node" | grep -v grep'
+          )
+          $commandContent = $commands -join "`n"
+          ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} "cat > /tmp/verify-local.sh << 'ENDOFSCRIPT'
+$commandContent
+ENDOFSCRIPT
+          chmod +x /tmp/verify-local.sh && /tmp/verify-local.sh"
         shell: pwsh
 
       - name: Verify deployment with HTTP health checks
