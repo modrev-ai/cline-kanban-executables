@@ -50,8 +50,6 @@ jobs:
     uses: ./.github/workflows/deploy-infrastructure.yml
     with:
       environment: ${{ github.event.inputs.environment }}
-      ssh-key-path: ${{ needs.auth-setup.outputs.ssh-key-path }}
-      known-hosts-path: ${{ needs.auth-setup.outputs.known-hosts-path }}
     secrets: inherit
 
   deploy-to-oci:

@@ -7,20 +7,15 @@ on:
         description: 'Deployment environment'
         type: string
         required: true
-      ssh-key-path:
-        description: 'Path to SSH key on runner'
-        type: string
-        required: true
-      known-hosts-path:
-        description: 'Path to known_hosts file'
-        type: string
-        required: true
     secrets:
       ORACLE_HOST:
         description: 'Oracle Compute instance public IP or hostname'
         required: true
       ORACLE_USER:
         description: 'SSH username for Oracle instance (typically opc)'
+        required: true
+      ORACLE_SSH_KEY_B64:
+        description: 'Base64-encoded SSH private key for Oracle instance'
         required: true
       DEPLOY_PATH:
         description: 'Remote deployment path on Oracle instance'
@@ -38,17 +33,34 @@ jobs:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-      SSH_KEY_PATH: ${{ inputs.ssh-key-path }}
-      KNOWN_HOSTS_PATH: ${{ inputs.known-hosts-path }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
     steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          
+          # Decode base64 SSH key - remove any whitespace/newlines from secret
+          key="${ORACLE_SSH_KEY}"
+          key=$(echo "$key" | tr -d '[:space:]')
+          
+          echo "$key" | base64 -d > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          
+          # Add host to known_hosts
+          echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+          ssh-keyscan -H -T 30 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
+          
+          echo "SSH key setup successful"
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
       - name: Setup SSH key permissions
         run: |
-          chmod 600 "${{ env.SSH_KEY_PATH }}"
-          chmod 644 "${{ env.KNOWN_HOSTS_PATH }}"
+          chmod 600 ~/.ssh/oracle_key
+          chmod 644 ~/.ssh/known_hosts
 
       - name: Test SSH connection
         run: |
-          ssh -i "${{ env.SSH_KEY_PATH }}" -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
+          ssh -i ~/.ssh/oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
 
       - name: Install system packages and Node.js on Oracle
         run: |
@@ -126,8 +138,8 @@ jobs:
           EOF
           
           chmod +x /tmp/install-infra.sh
-          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/install-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-infra.sh"
-          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/install-infra.sh && /tmp/install-infra.sh"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/install-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-infra.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/install-infra.sh && /tmp/install-infra.sh"
           rm /tmp/install-infra.sh
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -169,8 +181,8 @@ jobs:
           EOF
           
           chmod +x /tmp/configure-firewall.sh
-          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/configure-firewall.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/configure-firewall.sh"
-          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/configure-firewall.sh && /tmp/configure-firewall.sh"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/configure-firewall.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/configure-firewall.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/configure-firewall.sh && /tmp/configure-firewall.sh"
           rm /tmp/configure-firewall.sh
 
       - name: Create systemd service files on Oracle
@@ -237,8 +249,8 @@ jobs:
           EOF
           
           chmod +x /tmp/create-services.sh
-          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/create-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/create-services.sh"
-          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "DEPLOY_PATH='${{ env.DEPLOY_PATH }}' chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/create-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/create-services.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "DEPLOY_PATH='${{ env.DEPLOY_PATH }}' chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
           rm /tmp/create-services.sh
 
       - name: Enable and start services
@@ -270,8 +282,8 @@ jobs:
           EOF
           
           chmod +x /tmp/enable-services.sh
-          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/enable-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/enable-services.sh"
-          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/enable-services.sh && /tmp/enable-services.sh"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/enable-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/enable-services.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/enable-services.sh && /tmp/enable-services.sh"
           rm /tmp/enable-services.sh
 
       - name: Verify infrastructure deployment
@@ -302,6 +314,6 @@ jobs:
           EOF
           
           chmod +x /tmp/verify-infra.sh
-          scp -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" /tmp/verify-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/verify-infra.sh"
-          ssh -i "${{ env.SSH_KEY_PATH }}" -o UserKnownHostsFile="${{ env.KNOWN_HOSTS_PATH }}" "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/verify-infra.sh && /tmp/verify-infra.sh"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/verify-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/verify-infra.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/verify-infra.sh && /tmp/verify-infra.sh"
           rm /tmp/verify-infra.sh
