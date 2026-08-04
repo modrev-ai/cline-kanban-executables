@@ -188,7 +188,8 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 "@
-          $serviceContent = $serviceContent -replace '^  ', ''  # Remove leading spaces from here-string
+          # Remove all leading whitespace from each line (here-string preserves indentation)
+          $serviceContent = $serviceContent -replace '(?m)^\s+', ''
           $serviceContent | Set-Content -Path "kanban-proxy.service" -Encoding UTF8NoBOM -NoNewline
         shell: pwsh
 
@@ -215,7 +216,8 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 "@
-          $serviceContent = $serviceContent -replace '^  ', ''  # Remove leading spaces from here-string
+          # Remove all leading whitespace from each line (here-string preserves indentation)
+          $serviceContent = $serviceContent -replace '(?m)^\s+', ''
           $serviceContent | Set-Content -Path "kanban-server.service" -Encoding UTF8NoBOM -NoNewline
         shell: pwsh
 
