@@ -263,11 +263,6 @@ cline-kanban-executables/
 │       ├── setup-github-secrets.ps1  # GitHub secrets setup (Windows)
 │       ├── setup-github-secrets.sh   # GitHub secrets setup (Linux/macOS)
 │       └── setup.sh            # Oracle Cloud Free Tier setup
-├── server/                     # Server application
-│   ├── index.js                # Main server entry point
-│   └── db/                     # Database files
-├── server_init/                # Server initialization
-│   └── GITHUB_SERVER_SETUP.md  # GitHub server setup guide
 ├── start/                      # Start scripts for local development
 │   ├── start-all.bat           # Windows batch start script
 │   ├── start-all.ps1           # PowerShell start script
