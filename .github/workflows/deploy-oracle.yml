@@ -295,5 +295,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Access" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Kanban Proxy (Tailscale)**: http://$(ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} 'tailscale ip -4'):3484" >> $GITHUB_STEP_SUMMARY
+          # Get Tailscale IP if available, otherwise use direct IP
+          $tailscaleIp = ssh -i $env:USERPROFILE\.ssh\oracle_key ${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }} 'tailscale ip -4 2>/dev/null || echo ""'
+          if ($tailscaleIp) {
+            echo "- **Kanban Proxy (Tailscale)**: http://$tailscaleIp:3484" >> $GITHUB_STEP_SUMMARY
+          } else {
+            echo "- **Kanban Proxy (Direct)**: http://${{ env.ORACLE_HOST }}:3484" >> $GITHUB_STEP_SUMMARY
+          }
           echo "- **Kanban Server (Direct)**: http://${{ env.ORACLE_HOST }}:3485" >> $GITHUB_STEP_SUMMARY
+        shell: pwsh
