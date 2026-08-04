@@ -269,6 +269,59 @@ jobs:
           ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' ORACLE_USER='${{ env.ORACLE_USER }}' && chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
           rm /tmp/create-services.sh
 
+      - name: Debug service files
+        run: |
+          cat > /tmp/debug-services.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          echo "=== Checking service file syntax ==="
+          sudo systemd-analyze verify /etc/systemd/system/kanban-proxy.service 2>&1 || true
+          sudo systemd-analyze verify /etc/systemd/system/kanban-server.service 2>&1 || true
+          
+          echo "=== Checking service file content ==="
+          cat /etc/systemd/system/kanban-proxy.service
+          cat /etc/systemd/system/kanban-server.service
+          
+          echo "=== Checking user exists ==="
+          id "${ORACLE_USER}" 2>&1 || echo "User ${ORACLE_USER} does not exist"
+          
+          echo "=== Checking working directories ==="
+          ls -la "${DEPLOY_PATH}" 2>&1 || echo "DEPLOY_PATH not found"
+          ls -la "${DEPLOY_PATH}/prod_executable" 2>&1 || echo "prod_executable not found"
+          
+          echo "=== Checking node and cline ==="
+          which node 2>&1 || echo "node not found"
+          which cline 2>&1 || echo "cline not found"
+          ls -la /usr/bin/cline 2>&1 || echo "cline symlink not found"
+          
+          echo "=== Checking NODE_PATH ==="
+          ls -la /home/${ORACLE_USER}/.npm-global/lib/node_modules 2>&1 || echo "NODE_PATH not found"
+          
+          echo "=== Reloading systemd ==="
+          sudo systemctl daemon-reload
+          
+          echo "=== Checking unit file status ==="
+          systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || echo "Unit files not found"
+          
+          echo "=== Trying to start kanban-proxy to see error ==="
+          sudo systemctl start kanban-proxy 2>&1 || true
+          sleep 3
+          systemctl status kanban-proxy --no-pager -l 2>&1 || true
+          journalctl -u kanban-proxy --no-pager -l -n 50 2>&1 || true
+          
+          echo "=== Trying to start kanban-server to see error ==="
+          sudo systemctl start kanban-server 2>&1 || true
+          sleep 3
+          systemctl status kanban-server --no-pager -l 2>&1 || true
+          journalctl -u kanban-server --no-pager -l -n 50 2>&1 || true
+          EOF
+          
+          chmod +x /tmp/debug-services.sh
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/debug-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/debug-services.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' ORACLE_USER='${{ env.ORACLE_USER }}' && chmod +x /tmp/debug-services.sh && /tmp/debug-services.sh"
+          rm /tmp/debug-services.sh
+
       - name: Enable and start services
         run: |
           cat > /tmp/enable-services.sh << 'EOF'
