@@ -38,10 +38,10 @@ jobs:
             "prod_executable/cline-remote-launch.ps1",
             "prod_executable/cline-remote-launch.sh",
             "prod_executable/kanban-proxy.js",
-            "start-all.bat",
-            "start-all.ps1",
-            "start-all-with-tailscale.bat",
-            "start-all-with-tailscale.ps1",
+            "start/start-all.bat",
+            "start/start-all.ps1",
+            "start/start-all-with-tailscale.bat",
+            "start/start-all-with-tailscale.ps1",
             "README.md"
           )
           
@@ -75,7 +75,7 @@ jobs:
           Copy-Item -Path "prod_executable/*" -Destination "$stagingDir/prod_executable/" -Recurse -Force
           
           # Copy start scripts
-          Copy-Item -Path "start-all.bat", "start-all.ps1", "start-all-with-tailscale.bat", "start-all-with-tailscale.ps1" -Destination "$stagingDir/" -Force
+          Copy-Item -Path "start/start-all.bat", "start/start-all.ps1", "start/start-all-with-tailscale.bat", "start/start-all-with-tailscale.ps1" -Destination "$stagingDir/" -Force
           
           # Copy README
           Copy-Item -Path "README.md" -Destination "$stagingDir/" -Force
