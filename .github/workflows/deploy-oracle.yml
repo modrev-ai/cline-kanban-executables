@@ -32,7 +32,7 @@ jobs:
     uses: ./.github/workflows/build-package.yml
     with:
       environment: ${{ github.event.inputs.environment }}
-      force: ${{ github.event.inputs.force }}
+      force: ${{ fromJson(github.event.inputs.force) }}
     secrets: inherit
 
   auth-setup:
@@ -49,7 +49,7 @@ jobs:
     uses: ./.github/workflows/deploy-infrastructure.yml
     with:
       environment: ${{ github.event.inputs.environment }}
-      deploy-infrastructure: ${{ github.event.inputs.deploy-infrastructure }}
+      deploy-infrastructure: ${{ fromJson(github.event.inputs.deploy-infrastructure) }}
     secrets: inherit
 
   deploy-to-oci:
@@ -60,7 +60,7 @@ jobs:
       environment: ${{ github.event.inputs.environment }}
       ssh-key-path: ${{ needs.auth-setup.outputs.ssh-key-path }}
       known-hosts-path: ${{ needs.auth-setup.outputs.known-hosts-path }}
-      deploy-infrastructure: ${{ github.event.inputs.deploy-infrastructure }}
+      deploy-infrastructure: ${{ fromJson(github.event.inputs.deploy-infrastructure) }}
     secrets: inherit
 
   health-check:
