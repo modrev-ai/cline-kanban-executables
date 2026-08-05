@@ -80,7 +80,8 @@ jobs:
           
           echo "=== Installing system packages (skipping full update for speed) ==="
           # Skip full dnf update to avoid timeout - only install required packages
-          sudo dnf install -y git curl wget firewalld
+          # Use --refresh to update metadata upfront, --nobest to avoid dependency issues, --skip-unavailable for robustness
+          sudo dnf install -y --refresh --nobest --skip-unavailable git curl wget firewalld
           
           echo "=== Configuring swap (4GB) ==="
           if [ ! -f /swapfile ]; then
@@ -104,7 +105,7 @@ jobs:
           # Always upgrade to Node.js 22 regardless of current version
           # The kanban package requires Node.js >= 22
           curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
-          sudo dnf install -y nodejs
+          sudo dnf install -y --refresh --nobest --skip-unavailable nodejs
           
           echo "=== Verifying Node.js installation ==="
           node --version
