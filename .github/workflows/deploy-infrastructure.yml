@@ -143,7 +143,7 @@ jobs:
           
           chmod +x /tmp/install-infra.sh
           scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 /tmp/install-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/install-infra.sh"
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export ORACLE_USER='${{ env.ORACLE_USER }}' && chmod +x /tmp/install-infra.sh && /tmp/install-infra.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/install-infra.sh && ORACLE_USER='${{ env.ORACLE_USER }}' /tmp/install-infra.sh"
           rm /tmp/install-infra.sh
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -285,7 +285,7 @@ jobs:
           
           chmod +x /tmp/create-services.sh
           scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/create-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/create-services.sh"
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' ORACLE_USER='${{ env.ORACLE_USER }}' && chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "DEPLOY_PATH='${{ env.DEPLOY_PATH }}' ORACLE_USER='${{ env.ORACLE_USER }}' chmod +x /tmp/create-services.sh && /tmp/create-services.sh"
           rm /tmp/create-services.sh
 
       - name: Debug service files
@@ -339,7 +339,7 @@ jobs:
           
           chmod +x /tmp/debug-services.sh
           scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/debug-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/debug-services.sh"
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' ORACLE_USER='${{ env.ORACLE_USER }}' && chmod +x /tmp/debug-services.sh && /tmp/debug-services.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "DEPLOY_PATH='${{ env.DEPLOY_PATH }}' ORACLE_USER='${{ env.ORACLE_USER }}' chmod +x /tmp/debug-services.sh && /tmp/debug-services.sh"
           rm /tmp/debug-services.sh
 
       - name: Verify infrastructure deployment (packages, firewall, service files)
