@@ -33,7 +33,7 @@ jobs:
   deploy-infrastructure:
     name: Deploy Infrastructure to OCI
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
@@ -78,20 +78,8 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          echo "=== Installing system packages ==="
-          # Run dnf update in background with nohup to prevent SSH timeout
-          nohup sudo dnf update -y > /tmp/dnf-update.log 2>&1 &
-          UPDATE_PID=$!
-          echo "dnf update started in background (PID: $UPDATE_PID)"
-          
-          # Wait for update to complete with progress indication
-          while kill -0 $UPDATE_PID 2>/dev/null; do
-            echo "Waiting for dnf update to complete... (check /tmp/dnf-update.log for progress)"
-            sleep 30
-          done
-          wait $UPDATE_PID
-          echo "dnf update completed"
-          
+          echo "=== Installing system packages (skipping full update for speed) ==="
+          # Skip full dnf update to avoid timeout - only install required packages
           sudo dnf install -y git curl wget firewalld
           
           echo "=== Configuring swap (4GB) ==="
@@ -112,49 +100,43 @@ jobs:
             fi
           fi
           
-          echo "=== Installing Node.js 22 ==="
+          echo "=== Installing Node.js 22 via NodeSource (faster) ==="
           if ! command -v node &> /dev/null; then
-            NODE_VERSION="22.14.0"
-            ARCH="linux-x64"
-            cd /tmp
-            curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${ARCH}.tar.xz" -o node.tar.xz
-            tar -xf node.tar.xz
-            sudo cp -r node-v${NODE_VERSION}-${ARCH}/bin/* /usr/local/bin/
-            sudo cp -r node-v${NODE_VERSION}-${ARCH}/lib/* /usr/local/lib/
-            sudo cp -r node-v${NODE_VERSION}-${ARCH}/include/* /usr/local/include/
-            sudo cp -r node-v${NODE_VERSION}-${ARCH}/share/* /usr/local/share/
-            rm -rf node-v${NODE_VERSION}-${ARCH} node.tar.xz
+            # Use NodeSource repository for faster installation
+            curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
+            sudo dnf install -y nodejs
           fi
           
-          echo "=== Creating symlinks ==="
-          sudo ln -sf /usr/local/bin/node /usr/bin/node
-          sudo ln -sf /usr/local/bin/npm /usr/bin/npm
+          echo "=== Verifying Node.js installation ==="
+          node --version
+          npm --version
           
           echo "=== Configuring npm for low memory ==="
-          sudo /usr/local/bin/npm config set prefer-offline true
-          sudo /usr/local/bin/npm config set audit false
-          sudo /usr/local/bin/npm config set fund false
-          sudo /usr/local/bin/npm config set maxsockets 1
+          sudo npm config set prefer-offline true
+          sudo npm config set audit false
+          sudo npm config set fund false
+          sudo npm config set maxsockets 1
           
           echo "=== Configuring git ==="
           sudo git config --global url."https://github.com/".insteadOf "git@github.com:"
           sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
           
-          echo "=== Installing global npm packages ==="
-          sudo /usr/local/bin/npm install -g http-proxy --omit=optional --maxsockets=1 2>&1
+          echo "=== Installing global npm packages for ORACLE_USER ==="
+          # Install http-proxy as ORACLE_USER (not root) so it's in user's global node_modules
+          sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm install -g http-proxy --omit=optional --maxsockets=1' 2>&1
           
           echo "=== Installing cline from modrev-ai/cline ==="
           CLINE_VERSION=$(python3 -c "import urllib.request, json; data = json.load(urllib.request.urlopen('https://api.github.com/repos/modrev-ai/cline/releases/latest')); print(data['tag_name'])")
           echo "Latest cline version: $CLINE_VERSION"
-          sudo /usr/local/bin/npm install -g "https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_VERSION}.tar.gz" --omit=optional --maxsockets=1 2>&1
+          sudo npm install -g "https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_VERSION}.tar.gz" --omit=optional --maxsockets=1 2>&1
           
           echo "=== Creating cline symlink ==="
-          sudo ln -sf /usr/local/bin/cline /usr/bin/cline
+          sudo ln -sf $(which cline) /usr/bin/cline
           
           echo "=== Verifying installation ==="
-          /usr/local/bin/node --version
-          /usr/local/bin/npm --version
-          /usr/local/bin/cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
+          node --version
+          npm --version
+          cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
           
           echo "=== Infrastructure installation complete ==="
           EOF
@@ -174,19 +156,43 @@ jobs:
           set -euo pipefail
           
           echo "=== Configuring firewalld ==="
-          if systemctl is-active --quiet firewalld; then
-            sudo firewall-cmd --permanent --add-port=3484/tcp
-            sudo firewall-cmd --permanent --add-port=3485/tcp
-            sudo firewall-cmd --reload
-            echo "firewalld configured successfully"
-          else
+          # Check if firewalld is installed
+          if ! command -v firewall-cmd &> /dev/null; then
+            echo "firewall-cmd not found, installing firewalld..."
+            sudo dnf install -y firewalld
+          fi
+          
+          # Start and enable firewalld if not running
+          if ! systemctl is-active --quiet firewalld; then
             echo "firewalld not running, starting and enabling..."
             sudo systemctl enable --now firewalld
-            sudo firewall-cmd --permanent --add-port=3484/tcp
-            sudo firewall-cmd --permanent --add-port=3485/tcp
-            sudo firewall-cmd --reload
-            echo "firewalld started and configured"
+            # Wait for firewalld to be ready
+            sleep 3
           fi
+          
+          # Add ports to firewalld (with retries)
+          for port in 3484 3485; do
+            for i in {1..3}; do
+              if sudo firewall-cmd --permanent --add-port=${port}/tcp 2>/dev/null; then
+                echo "Added port ${port}/tcp to firewalld (permanent)"
+                break
+              else
+                echo "Attempt $i: Failed to add port ${port}/tcp, retrying..."
+                sleep 2
+              fi
+            done
+          done
+          
+          # Reload firewalld
+          for i in {1..3}; do
+            if sudo firewall-cmd --reload 2>/dev/null; then
+              echo "firewalld reloaded successfully"
+              break
+            else
+              echo "Attempt $i: Failed to reload firewalld, retrying..."
+              sleep 2
+            fi
+          done
           
           echo "=== Configuring iptables as fallback ==="
           sudo iptables -I INPUT -p tcp --dport 3484 -j ACCEPT 2>/dev/null || true
@@ -198,7 +204,7 @@ jobs:
           
           echo "=== Verifying ports are open ==="
           sudo iptables -L INPUT -n | grep -E "3484|3485" || echo "No iptables rules found for ports 3484/3485"
-          sudo firewall-cmd --list-ports | grep -E "3484|3485" || echo "No firewalld ports found"
+          sudo firewall-cmd --list-ports 2>/dev/null | grep -E "3484|3485" || echo "No firewalld ports found (may need manual check)"
           
           echo "=== Firewall configuration complete ==="
           EOF
@@ -336,80 +342,7 @@ jobs:
           ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' ORACLE_USER='${{ env.ORACLE_USER }}' && chmod +x /tmp/debug-services.sh && /tmp/debug-services.sh"
           rm /tmp/debug-services.sh
 
-      - name: Enable and start services
-        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
-        run: |
-          cat > /tmp/enable-services.sh << 'EOF'
-          #!/bin/bash
-          set -euo pipefail
-          
-          echo "=== Reloading systemd ==="
-          sudo systemctl daemon-reload
-          
-          echo "=== Verifying unit files loaded ==="
-          systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found" && exit 1)
-          
-          echo "=== Enabling services ==="
-          sudo systemctl enable kanban-proxy kanban-server
-          
-          echo "=== Starting services ==="
-          sudo systemctl restart kanban-proxy kanban-server
-          
-          echo "=== Verifying services started (with retries) ==="
-          maxRetries=10
-          retryDelay=5
-          
-          for i in $(seq 1 $maxRetries); do
-            echo "Attempt $i of $maxRetries: Checking service status..."
-            
-            proxyActive=false
-            serverActive=false
-            
-            if systemctl is-active --quiet kanban-proxy; then
-              proxyActive=true
-            fi
-            
-            if systemctl is-active --quiet kanban-server; then
-              serverActive=true
-            fi
-            
-            if [ "$proxyActive" = true ] && [ "$serverActive" = true ]; then
-              echo "=== Both services are active ==="
-              break
-            fi
-            
-            if [ $i -lt $maxRetries ]; then
-              echo "Services not ready yet. Waiting $retryDelay seconds before retry..."
-              sleep $retryDelay
-            fi
-          done
-          
-          # Final verification
-          if ! systemctl is-active --quiet kanban-proxy; then
-            echo "ERROR: kanban-proxy not active after $maxRetries attempts" >&2
-            sudo systemctl status kanban-proxy --no-pager -l
-            journalctl -u kanban-proxy --no-pager -l -n 50
-            exit 1
-          fi
-          
-          if ! systemctl is-active --quiet kanban-server; then
-            echo "ERROR: kanban-server not active after $maxRetries attempts" >&2
-            sudo systemctl status kanban-server --no-pager -l
-            journalctl -u kanban-server --no-pager -l -n 50
-            exit 1
-          fi
-          
-          echo "=== Services enabled and started successfully ==="
-          systemctl status kanban-proxy --no-pager -l
-          systemctl status kanban-server --no-pager -l
-          EOF
-          
-          chmod +x /tmp/enable-services.sh
-          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/enable-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/enable-services.sh"
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/enable-services.sh && /tmp/enable-services.sh"
-          rm /tmp/enable-services.sh
-
-      - name: Verify infrastructure deployment
+      - name: Verify infrastructure deployment (packages, firewall, service files)
         if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
           cat > /tmp/verify-infra.sh << 'EOF'
@@ -424,20 +357,41 @@ jobs:
           echo "=== Verifying global packages ==="
           npm list -g http-proxy --depth=0
           
-          echo "=== Verifying services ==="
-          systemctl is-active kanban-proxy
-          systemctl is-active kanban-server
+          echo "=== Verifying service files exist ==="
+          systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found" && exit 1)
           
-          echo "=== Verifying ports ==="
-          ss -tlnp | grep -E ":3484|:3485"
+          echo "=== Verifying service file syntax ==="
+          sudo systemd-analyze verify /etc/systemd/system/kanban-proxy.service
+          sudo systemd-analyze verify /etc/systemd/system/kanban-server.service
           
           echo "=== Verifying firewall ==="
           sudo firewall-cmd --list-ports | grep -E "3484|3485"
           
-          echo "=== Infrastructure verification complete ==="
+          echo "=== Infrastructure verification complete (services NOT started - will be started after app deployment) ==="
           EOF
           
           chmod +x /tmp/verify-infra.sh
-          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/verify-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/verify-infra.sh"
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/verify-infra.sh && /tmp/verify-infra.sh"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 /tmp/verify-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/verify-infra.sh"
+          
+          # Run verification with retries
+          maxRetries=5
+          retryDelay=10
+          
+          for i in $(seq 1 $maxRetries); do
+            echo "Attempt $i of $maxRetries: Running infrastructure verification..."
+            
+            if ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -o ConnectTimeout=30 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/verify-infra.sh && /tmp/verify-infra.sh"; then
+              echo "=== Infrastructure verification passed on attempt $i ==="
+              break
+            else
+              echo "Attempt $i failed. Waiting $retryDelay seconds before retry..."
+              if [ $i -lt $maxRetries ]; then
+                sleep $retryDelay
+              fi
+            fi
+          done
+          
+          # Final check
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -o ConnectTimeout=30 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "/tmp/verify-infra.sh"
+          
           rm /tmp/verify-infra.sh

@@ -45,11 +45,11 @@ jobs:
 
   deploy-infrastructure:
     name: Deploy Infrastructure to OCI
-    if: ${{ github.event.inputs.deploy-infrastructure }}
     needs: auth-setup
     uses: ./.github/workflows/deploy-infrastructure.yml
     with:
       environment: ${{ github.event.inputs.environment }}
+      deploy-infrastructure: ${{ github.event.inputs.deploy-infrastructure }}
     secrets: inherit
 
   deploy-to-oci:
@@ -60,6 +60,7 @@ jobs:
       environment: ${{ github.event.inputs.environment }}
       ssh-key-path: ${{ needs.auth-setup.outputs.ssh-key-path }}
       known-hosts-path: ${{ needs.auth-setup.outputs.known-hosts-path }}
+      deploy-infrastructure: ${{ github.event.inputs.deploy-infrastructure }}
     secrets: inherit
 
   health-check:

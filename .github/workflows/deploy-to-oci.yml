@@ -101,8 +101,8 @@ jobs:
           fi
           
           echo "=== Verifying services restarted (with retries) ==="
-          maxRetries=10
-          retryDelay=5
+          maxRetries=20
+          retryDelay=10
           
           for i in $(seq 1 $maxRetries); do
             echo "Attempt $i of $maxRetries: Checking service status..."
@@ -123,6 +123,12 @@ jobs:
               break
             fi
             
+            # Show service status on each attempt for debugging
+            echo "--- kanban-proxy status ---"
+            systemctl status kanban-proxy --no-pager -l 2>&1 | head -20 || true
+            echo "--- kanban-server status ---"
+            systemctl status kanban-server --no-pager -l 2>&1 | head -20 || true
+            
             if [ $i -lt $maxRetries ]; then
               echo "Services not ready yet. Waiting $retryDelay seconds before retry..."
               sleep $retryDelay
@@ -133,14 +139,14 @@ jobs:
           if ! systemctl is-active --quiet kanban-proxy; then
             echo "ERROR: kanban-proxy not active after $maxRetries attempts" >&2
             sudo systemctl status kanban-proxy --no-pager -l
-            journalctl -u kanban-proxy --no-pager -l -n 50
+            journalctl -u kanban-proxy --no-pager -l -n 100
             exit 1
           fi
           
           if ! systemctl is-active --quiet kanban-server; then
             echo "ERROR: kanban-server not active after $maxRetries attempts" >&2
             sudo systemctl status kanban-server --no-pager -l
-            journalctl -u kanban-server --no-pager -l -n 50
+            journalctl -u kanban-server --no-pager -l -n 100
             exit 1
           fi
           
