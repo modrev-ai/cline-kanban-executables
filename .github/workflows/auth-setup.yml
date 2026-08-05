@@ -20,21 +20,11 @@ on:
       DEPLOY_PATH:
         description: 'Remote deployment path on Oracle instance'
         required: true
-    outputs:
-      ssh-key-path:
-        description: 'Path to the SSH key on the runner'
-        value: ${{ jobs.auth.outputs.ssh-key-path }}
-      known-hosts-path:
-        description: 'Path to known_hosts file'
-        value: ${{ jobs.auth.outputs.known-hosts-path }}
 
 jobs:
   auth:
     name: Setup SSH and Environment
     runs-on: ubuntu-latest
-    outputs:
-      ssh-key-path: ${{ steps.setup-ssh.outputs.ssh-key-path }}
-      known-hosts-path: ${{ steps.setup-ssh.outputs.known-hosts-path }}
     env:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
@@ -42,7 +32,6 @@ jobs:
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
     steps:
       - name: Setup SSH key
-        id: setup-ssh
         run: |
           mkdir -p ~/.ssh
           
@@ -56,10 +45,6 @@ jobs:
           # Add host to known_hosts
           echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
           ssh-keyscan -H -T 30 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
-          
-          # Use absolute paths (expand ~ to $HOME)
-          echo "ssh-key-path=$HOME/.ssh/oracle_key" >> $GITHUB_OUTPUT
-          echo "known-hosts-path=$HOME/.ssh/known_hosts" >> $GITHUB_OUTPUT
           
           echo "SSH key setup successful"
 

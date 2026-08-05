@@ -58,8 +58,6 @@ jobs:
     uses: ./.github/workflows/deploy-to-oci.yml
     with:
       environment: ${{ github.event.inputs.environment }}
-      ssh-key-path: ${{ needs.auth-setup.outputs.ssh-key-path }}
-      known-hosts-path: ${{ needs.auth-setup.outputs.known-hosts-path }}
       deploy-infrastructure: ${{ fromJson(github.event.inputs.deploy-infrastructure) }}
     secrets: inherit
 
@@ -69,6 +67,4 @@ jobs:
     uses: ./.github/workflows/health-check.yml
     with:
       environment: ${{ github.event.inputs.environment }}
-      ssh-key-path: ${{ needs.auth-setup.outputs.ssh-key-path }}
-      known-hosts-path: ${{ needs.auth-setup.outputs.known-hosts-path }}
     secrets: inherit

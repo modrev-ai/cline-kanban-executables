@@ -7,14 +7,6 @@ on:
         description: 'Deployment environment'
         type: string
         required: true
-      ssh-key-path:
-        description: 'Path to SSH key on runner'
-        type: string
-        required: true
-      known-hosts-path:
-        description: 'Path to known_hosts file'
-        type: string
-        required: true
     secrets:
       ORACLE_HOST:
         description: 'Oracle Compute instance public IP or hostname'
@@ -24,6 +16,9 @@ on:
         required: true
       DEPLOY_PATH:
         description: 'Remote deployment path on Oracle instance'
+        required: true
+      ORACLE_SSH_KEY_B64:
+        description: 'Base64-encoded SSH private key for Oracle instance'
         required: true
 
 jobs:
@@ -35,9 +30,27 @@ jobs:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-      SSH_KEY_PATH: ${{ inputs.ssh-key-path }}
-      KNOWN_HOSTS_PATH: ${{ inputs.known-hosts-path }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
     steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          
+          # Decode base64 SSH key - remove any whitespace/newlines from secret
+          key="${ORACLE_SSH_KEY}"
+          key=$(echo "$key" | tr -d '[:space:]')
+          
+          echo "$key" | base64 -d > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          
+          # Add host to known_hosts
+          echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+          ssh-keyscan -H -T 30 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
+          
+          echo "SSH key setup successful"
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+
       - name: Check service status on Oracle
         run: |
           cat > /tmp/check-status.sh << 'EOF'
@@ -55,8 +68,8 @@ jobs:
           tailscale status 2>/dev/null || echo "Tailscale not running"
           EOF
           chmod +x /tmp/check-status.sh
-          scp -i "${SSH_KEY_PATH}" -o UserKnownHostsFile="${KNOWN_HOSTS_PATH}" /tmp/check-status.sh "${ORACLE_USER}@${ORACLE_HOST}:/tmp/check-status.sh"
-          ssh -i "${SSH_KEY_PATH}" -o UserKnownHostsFile="${KNOWN_HOSTS_PATH}" "${ORACLE_USER}@${ORACLE_HOST}" "chmod +x /tmp/check-status.sh && /tmp/check-status.sh"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/check-status.sh "${ORACLE_USER}@${ORACLE_HOST}:/tmp/check-status.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" "chmod +x /tmp/check-status.sh && /tmp/check-status.sh"
           rm /tmp/check-status.sh
 
       - name: Verify services are listening locally on Oracle
@@ -76,8 +89,8 @@ jobs:
           ps aux | grep -E "kanban|cline|node" | grep -v grep
           EOF
           chmod +x /tmp/verify-local.sh
-          scp -i "${SSH_KEY_PATH}" -o UserKnownHostsFile="${KNOWN_HOSTS_PATH}" /tmp/verify-local.sh "${ORACLE_USER}@${ORACLE_HOST}:/tmp/verify-local.sh"
-          ssh -i "${SSH_KEY_PATH}" -o UserKnownHostsFile="${KNOWN_HOSTS_PATH}" "${ORACLE_USER}@${ORACLE_HOST}" "chmod +x /tmp/verify-local.sh && /tmp/verify-local.sh"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/verify-local.sh "${ORACLE_USER}@${ORACLE_HOST}:/tmp/verify-local.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" "chmod +x /tmp/verify-local.sh && /tmp/verify-local.sh"
           rm /tmp/verify-local.sh
 
       - name: Verify deployment with HTTP health checks
@@ -167,7 +180,7 @@ jobs:
           echo "### Access" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           # Get Tailscale IP if available, otherwise use direct IP
-          tailscaleIp=$(ssh -i "${SSH_KEY_PATH}" -o UserKnownHostsFile="${KNOWN_HOSTS_PATH}" "${ORACLE_USER}@${ORACLE_HOST}" 'tailscale ip -4 2>/dev/null || echo ""')
+          tailscaleIp=$(ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" 'tailscale ip -4 2>/dev/null || echo ""')
           if [ -n "$tailscaleIp" ]; then
             echo "- **Kanban Proxy (Tailscale)**: http://$tailscaleIp:3484" >> $GITHUB_STEP_SUMMARY
           else
