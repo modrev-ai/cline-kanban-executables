@@ -114,14 +114,16 @@ jobs:
           fi
           
           echo "=== Verifying services restarted (with retries) ==="
-          maxRetries=20
-          retryDelay=10
+          maxRetries=30
+          retryDelay=15
           
           for i in $(seq 1 $maxRetries); do
             echo "Attempt $i of $maxRetries: Checking service status..."
             
             proxyActive=false
             serverActive=false
+            proxyHttpReady=false
+            serverHttpReady=false
             
             if systemctl is-active --quiet kanban-proxy; then
               proxyActive=true
@@ -131,8 +133,21 @@ jobs:
               serverActive=true
             fi
             
-            if [ "$proxyActive" = true ] && [ "$serverActive" = true ]; then
-              echo "=== Both services are active ==="
+            # Also verify HTTP connectivity
+            if [ "$proxyActive" = true ]; then
+              if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 5 2>/dev/null | grep -q "200"; then
+                proxyHttpReady=true
+              fi
+            fi
+            
+            if [ "$serverActive" = true ]; then
+              if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 5 2>/dev/null | grep -q "200"; then
+                serverHttpReady=true
+              fi
+            fi
+            
+            if [ "$proxyActive" = true ] && [ "$serverActive" = true ] && [ "$proxyHttpReady" = true ] && [ "$serverHttpReady" = true ]; then
+              echo "=== Both services are active and HTTP-ready ==="
               break
             fi
             
@@ -163,7 +178,18 @@ jobs:
             exit 1
           fi
           
-          echo "=== Services restarted successfully ==="
+          # Final HTTP verification
+          if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 5 2>/dev/null | grep -q "200"; then
+            echo "ERROR: kanban-proxy not responding to HTTP on port 3484" >&2
+            exit 1
+          fi
+          
+          if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 5 2>/dev/null | grep -q "200"; then
+            echo "ERROR: kanban-server not responding to HTTP on port 3485" >&2
+            exit 1
+          fi
+          
+          echo "=== Services restarted successfully and HTTP-ready ==="
           systemctl status kanban-proxy --no-pager -l
           systemctl status kanban-server --no-pager -l
           EOF

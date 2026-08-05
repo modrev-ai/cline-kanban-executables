@@ -95,8 +95,8 @@ jobs:
 
       - name: Verify deployment with HTTP health checks
         run: |
-          maxRetries=5
-          retryDelay=10
+          maxRetries=15
+          retryDelay=20
           proxyUrl="http://${ORACLE_HOST}:3484"
           serverUrl="http://${ORACLE_HOST}:3485"
           
