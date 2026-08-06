@@ -176,19 +176,24 @@ jobs:
           sudo git config --global url."https://github.com/".insteadOf "git@github.com:"
           sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
           
-          # Install http-proxy as ORACLE_USER (not root) so it's in user's global node_modules
-          sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm install -g http-proxy --omit=optional --maxsockets=1' 2>&1 | tail -10
+          echo "=== Installing http-proxy, cline, and kanban as ORACLE_USER (not root) ==="
+          # Configure npm for ORACLE_USER
+          sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm config set prefer-offline true && npm config set audit false && npm config set fund false && npm config set maxsockets 1'
+          
+          # Install http-proxy
+          sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=1' 2>&1 | tail -10
           
           echo "=== Installing cline from modrev-ai/cline ==="
           CLINE_VERSION=$(python3 -c "import urllib.request, json; data = json.load(urllib.request.urlopen('https://api.github.com/repos/modrev-ai/cline/releases/latest')); print(data['tag_name'])")
           echo "Latest cline version: $CLINE_VERSION"
-          sudo npm install -g "https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_VERSION}.tar.gz" --omit=optional --maxsockets=1 2>&1 | tail -10
+          sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1 | tail -10
           
           echo "=== Installing kanban package globally (required for 'cline kanban') ==="
-          sudo npm install -g kanban --omit=optional --maxsockets=1 2>&1 | tail -10
+          sudo -u "${ORACLE_USER}" bash -c 'npm install -g kanban --omit=optional --maxsockets=1' 2>&1 | tail -10
           
           echo "=== Creating cline symlink ==="
-          sudo ln -sf $(which cline) /usr/bin/cline
+          sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
+          sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
           
           echo "=== Verifying installation ==="
           node --version
@@ -261,9 +266,10 @@ jobs:
           Type=simple
           User=${ORACLE_USER}
           WorkingDirectory=${DEPLOY_PATH}
-          Environment=KANBAN_RUNTIME_HOST=0.0.0.0
+          Environment=KANBAN_RUNTIME_HOST=127.0.0.1
           Environment=KANBAN_RUNTIME_PORT=3485
           Environment=NODE_ENV=production
+          Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
           ExecStart=/usr/bin/cline kanban
           Restart=on-failure
           RestartSec=10
