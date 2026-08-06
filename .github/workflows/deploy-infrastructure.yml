@@ -184,6 +184,9 @@ jobs:
           echo "Latest cline version: $CLINE_VERSION"
           sudo npm install -g "https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_VERSION}.tar.gz" --omit=optional --maxsockets=1 2>&1 | tail -10
           
+          echo "=== Installing kanban package globally (required for 'cline kanban') ==="
+          sudo npm install -g kanban --omit=optional --maxsockets=1 2>&1 | tail -10
+          
           echo "=== Creating cline symlink ==="
           sudo ln -sf $(which cline) /usr/bin/cline
           
@@ -191,6 +194,7 @@ jobs:
           node --version
           npm --version
           cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
+          cline kanban --help 2>&1 | head -5 || echo "cline kanban help check completed"
           
           echo "=== Configuring firewalld (single pass, no retries) ==="
           # Check if firewalld is installed
