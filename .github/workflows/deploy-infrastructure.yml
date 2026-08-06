@@ -112,7 +112,13 @@ jobs:
           echo "=== Installing/Upgrading Node.js 22 via NodeSource (faster) ==="
           # Always upgrade to Node.js 22 regardless of current version
           # The kanban package requires Node.js >= 22
+          # First, remove any existing nodejs to avoid conflicts
+          sudo dnf remove -y nodejs npm 2>/dev/null || true
+          sudo dnf module reset -y nodejs 2>/dev/null || true
+          sudo dnf module disable -y nodejs 2>/dev/null || true
           curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
+          # Explicitly enable the nodejs:22 module after NodeSource setup
+          sudo dnf module enable -y nodejs:22 2>/dev/null || true
           # Add retry logic for dnf lock contention
           for i in {1..5}; do
             if sudo dnf install -y --refresh --nobest nodejs; then
