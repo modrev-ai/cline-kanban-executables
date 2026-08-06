@@ -92,7 +92,7 @@ jobs:
           echo "=== [1/4] Installing system packages (minimal, no repo refresh) ==="
           # Install required packages WITHOUT --refresh to avoid slow Oracle Linux repo metadata updates
           # Use --setopt=install_weak_deps=False to skip weak dependencies
-          sudo dnf install -y --nobest --skip-broken --setopt=install_weak_deps=False git curl wget firewalld 2>&1 | tail -20
+          sudo dnf install -y --nodocs --setopt=install_weak_deps=False git curl wget firewalld 2>&1
           
           echo "=== [2/4] Configuring swap (4GB) ==="
           if [ ! -f /swapfile ]; then
