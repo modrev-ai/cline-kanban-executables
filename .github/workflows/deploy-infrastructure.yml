@@ -90,15 +90,14 @@ jobs:
           #!/bin/bash
           set -euo pipefail
           
-          echo "=== Installing system packages (skipping full update for speed) ==="
-          # Skip full dnf update to avoid timeout - only install required packages
-          # Use --refresh to update metadata upfront, --nobest to avoid dependency issues
-          # Add retry logic for dnf lock contention
-          for i in {1..5}; do
-            if sudo dnf install -y --refresh --nobest git curl wget firewalld; then
+          echo "=== Installing system packages (minimal, no repo refresh) ==="
+          # Install required packages WITHOUT --refresh to avoid slow Oracle Linux repo metadata updates
+          # Use --nobest to avoid dependency issues, --skip-broken to continue on conflicts
+          for i in {1..3}; do
+            if sudo dnf install -y --nobest --skip-broken git curl wget firewalld; then
               break
             else
-              echo "dnf install failed (attempt $i/5), waiting 10s for lock to clear..."
+              echo "dnf install failed (attempt $i/3), waiting 10s for lock to clear..."
               sleep 10
             fi
           done
@@ -121,64 +120,35 @@ jobs:
             fi
           fi
           
-          echo "=== Installing/Upgrading Node.js 22 via NodeSource (faster) ==="
-          # Always upgrade to Node.js 22 regardless of current version
-          # The kanban package requires Node.js >= 22
-          # First, remove any existing nodejs to avoid conflicts
+          echo "=== Installing Node.js 22 via binary download (fastest, no repo updates) ==="
+          # Remove any existing nodejs to avoid conflicts
           sudo dnf remove -y nodejs npm 2>/dev/null || true
           sudo dnf module reset -y nodejs 2>/dev/null || true
           sudo dnf module disable -y nodejs 2>/dev/null || true
-          # Clear dnf cache to ensure fresh metadata
-          sudo dnf clean all
-          curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
-          # Explicitly enable the nodejs:22 module after NodeSource setup
-          sudo dnf module enable -y nodejs:22 2>/dev/null || true
-          # Clear cache again after NodeSource setup
-          sudo dnf clean all
-          # Add retry logic for dnf lock contention
-          for i in {1..5}; do
-            if sudo dnf install -y --refresh --nobest nodejs; then
-              break
-            else
-              echo "dnf install nodejs failed (attempt $i/5), waiting 10s for lock to clear..."
-              sleep 10
-            fi
-          done
-          # Verify the installed version and force reinstall if wrong
-          INSTALLED_VERSION=$(node --version 2>/dev/null | sed 's/v\([0-9]*\).*/\1/' || echo "0")
-          if [ "$INSTALLED_VERSION" -lt 22 ]; then
-            echo "WARNING: Installed Node.js version is $INSTALLED_VERSION, expected >= 22. Forcing reinstall..."
-            sudo dnf remove -y nodejs npm 2>/dev/null || true
-            sudo dnf module reset -y nodejs 2>/dev/null || true
-            sudo dnf module disable -y nodejs 2>/dev/null || true
-            sudo dnf clean all
-            curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
-            sudo dnf module enable -y nodejs:22 2>/dev/null || true
-            sudo dnf clean all
-            for i in {1..5}; do
-              if sudo dnf install -y --refresh --nobest nodejs; then
-                break
-              else
-                echo "dnf install nodejs failed (attempt $i/5), waiting 10s for lock to clear..."
-                sleep 10
-              fi
-            done
-          fi
           
-          echo "=== Verifying Node.js installation ==="
-          # Clear command hash table to ensure we're using the newly installed node
-          hash -r 2>/dev/null || true
-          # Use full path to avoid any PATH caching issues
+          # Download and install Node.js 22 binary directly (bypasses NodeSource repo entirely)
+          NODE_VERSION="22.14.0"
+          ARCH="x64"
+          cd /tmp
+          echo "Downloading Node.js ${NODE_VERSION} binary..."
+          curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o node.tar.xz
+          tar -xf node.tar.xz
+          sudo rm -rf /usr/local/lib/nodejs
+          sudo mkdir -p /usr/local/lib/nodejs
+          sudo mv "node-v${NODE_VERSION}-linux-${ARCH}" /usr/local/lib/nodejs/node-v${NODE_VERSION}
+          
+          # Create symlinks
+          sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/node /usr/bin/node
+          sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npm /usr/bin/npm
+          sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npx /usr/bin/npx
+          
+          # Verify installation
           /usr/bin/node --version
           /usr/bin/npm --version
           
-          # Verify Node.js version is >= 22
           NODE_MAJOR=$(/usr/bin/node --version | sed 's/v\([0-9]*\).*/\1/')
           if [ "$NODE_MAJOR" -lt 22 ]; then
             echo "ERROR: Node.js version is $NODE_MAJOR, but version 22 or higher is required"
-            echo "Checking alternative node locations:"
-            which -a node 2>/dev/null || true
-            ls -la /usr/bin/node* 2>/dev/null || true
             exit 1
           fi
           echo "Node.js version $NODE_MAJOR meets requirement (>= 22)"
