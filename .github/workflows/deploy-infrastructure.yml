@@ -116,9 +116,13 @@ jobs:
           sudo dnf remove -y nodejs npm 2>/dev/null || true
           sudo dnf module reset -y nodejs 2>/dev/null || true
           sudo dnf module disable -y nodejs 2>/dev/null || true
+          # Clear dnf cache to ensure fresh metadata
+          sudo dnf clean all
           curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
           # Explicitly enable the nodejs:22 module after NodeSource setup
           sudo dnf module enable -y nodejs:22 2>/dev/null || true
+          # Clear cache again after NodeSource setup
+          sudo dnf clean all
           # Add retry logic for dnf lock contention
           for i in {1..5}; do
             if sudo dnf install -y --refresh --nobest nodejs; then
@@ -128,6 +132,26 @@ jobs:
               sleep 10
             fi
           done
+          # Verify the installed version and force reinstall if wrong
+          INSTALLED_VERSION=$(node --version 2>/dev/null | sed 's/v\([0-9]*\).*/\1/' || echo "0")
+          if [ "$INSTALLED_VERSION" -lt 22 ]; then
+            echo "WARNING: Installed Node.js version is $INSTALLED_VERSION, expected >= 22. Forcing reinstall..."
+            sudo dnf remove -y nodejs npm 2>/dev/null || true
+            sudo dnf module reset -y nodejs 2>/dev/null || true
+            sudo dnf module disable -y nodejs 2>/dev/null || true
+            sudo dnf clean all
+            curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
+            sudo dnf module enable -y nodejs:22 2>/dev/null || true
+            sudo dnf clean all
+            for i in {1..5}; do
+              if sudo dnf install -y --refresh --nobest nodejs; then
+                break
+              else
+                echo "dnf install nodejs failed (attempt $i/5), waiting 10s for lock to clear..."
+                sleep 10
+              fi
+            done
+          fi
           
           echo "=== Verifying Node.js installation ==="
           node --version
