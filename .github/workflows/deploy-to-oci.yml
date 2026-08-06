@@ -200,4 +200,4 @@ jobs:
             echo "=== Services restarted successfully and HTTP-ready ==="
             systemctl status kanban-proxy --no-pager -l
             systemctl status kanban-server --no-pager -l
-ENDSSH
+          ENDSSH
