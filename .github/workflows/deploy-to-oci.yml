@@ -88,6 +88,11 @@ jobs:
           ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" '
             set -euo pipefail
             echo "=== Restarting services after deployment ==="
+            
+            # Debug: Check service files exist
+            echo "Checking service files..."
+            ls -la /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || echo "WARNING: Service files not found!"
+            
             sudo systemctl daemon-reload
             
             # Check if services exist
@@ -114,22 +119,32 @@ jobs:
               
               if systemctl is-active --quiet kanban-proxy; then
                 proxyActive=true
+              else
+                echo "kanban-proxy not active, status:"
+                sudo systemctl status kanban-proxy --no-pager -l
               fi
               
               if systemctl is-active --quiet kanban-server; then
                 serverActive=true
+              else
+                echo "kanban-server not active, status:"
+                sudo systemctl status kanban-server --no-pager -l
               fi
               
               # Also verify HTTP connectivity
               if [ "$proxyActive" = true ]; then
                 if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 3 2>/dev/null | grep -q "200"; then
                   proxyHttpReady=true
+                else
+                  echo "kanban-proxy HTTP check failed on port 3484"
                 fi
               fi
               
               if [ "$serverActive" = true ]; then
                 if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 3 2>/dev/null | grep -q "200"; then
                   serverHttpReady=true
+                else
+                  echo "kanban-server HTTP check failed on port 3485"
                 fi
               fi
               
