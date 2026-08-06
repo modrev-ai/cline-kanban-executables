@@ -93,6 +93,14 @@ jobs:
             echo "Checking service files..."
             ls -la /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || echo "WARNING: Service files not found!"
             
+            # Debug: Check deployment files
+            echo "Checking deployment files..."
+            ls -la "${{ env.DEPLOY_PATH }}/prod_executable/kanban-proxy.js" 2>/dev/null || echo "WARNING: kanban-proxy.js not found!"
+            which cline 2>/dev/null || echo "WARNING: cline not in PATH!"
+            
+            # Fix SELinux context if needed
+            sudo restorecon -v /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || true
+            
             sudo systemctl daemon-reload
             
             # Check if services exist
@@ -106,8 +114,8 @@ jobs:
             fi
             
             echo "=== Verifying services restarted ==="
-            maxRetries=5
-            retryDelay=3
+            maxRetries=8
+            retryDelay=5
             
             for i in $(seq 1 $maxRetries); do
               echo "Attempt $i of $maxRetries: Checking service status..."
@@ -122,6 +130,8 @@ jobs:
               else
                 echo "kanban-proxy not active, status:"
                 sudo systemctl status kanban-proxy --no-pager -l
+                echo "kanban-proxy logs:"
+                journalctl -u kanban-proxy --no-pager -l -n 30
               fi
               
               if systemctl is-active --quiet kanban-server; then
@@ -129,6 +139,8 @@ jobs:
               else
                 echo "kanban-server not active, status:"
                 sudo systemctl status kanban-server --no-pager -l
+                echo "kanban-server logs:"
+                journalctl -u kanban-server --no-pager -l -n 30
               fi
               
               # Also verify HTTP connectivity
@@ -163,14 +175,14 @@ jobs:
             if ! systemctl is-active --quiet kanban-proxy; then
               echo "ERROR: kanban-proxy not active after $maxRetries attempts" >&2
               sudo systemctl status kanban-proxy --no-pager -l
-              journalctl -u kanban-proxy --no-pager -l -n 20
+              journalctl -u kanban-proxy --no-pager -l -n 50
               exit 1
             fi
             
             if ! systemctl is-active --quiet kanban-server; then
               echo "ERROR: kanban-server not active after $maxRetries attempts" >&2
               sudo systemctl status kanban-server --no-pager -l
-              journalctl -u kanban-server --no-pager -l -n 20
+              journalctl -u kanban-server --no-pager -l -n 50
               exit 1
             fi
             

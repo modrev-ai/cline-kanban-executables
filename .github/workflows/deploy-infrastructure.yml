@@ -94,25 +94,16 @@ jobs:
           # Verify they exist instead of installing via dnf (avoids slow repo metadata updates)
           for cmd in git curl wget firewall-cmd; do
             if ! command -v "$cmd" &> /dev/null; then
-              echo "WARNING: $cmd not found, attempting alternative installation..."
+              echo "WARNING: $cmd not found - Oracle Linux should have these pre-installed"
               case "$cmd" in
-                git)
-                  # Git: try to install from source or use pre-compiled binary
-                  echo "Git not found - attempting to install from source..."
-                  cd /tmp && curl -fsSL "https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.45.0.tar.gz" -o git.tar.gz 2>/dev/null && tar -xzf git.tar.gz && cd git-* && make configure && ./configure --prefix=/usr/local && make -j$(nproc) && sudo make install 2>&1 | tail -5 || echo "ERROR: git installation from source failed"
-                  ;;
-                curl)
-                  # Download static curl binary
-                  cd /tmp && curl -fsSL "https://curl.se/download/curl-8.7.1.tar.gz" -o curl.tar.gz 2>/dev/null && tar -xzf curl.tar.gz && cd curl-* && ./configure --prefix=/usr/local && make -j$(nproc) && sudo make install 2>&1 | tail -5 || echo "ERROR: curl installation from source failed"
-                  ;;
-                wget)
-                  # Download static wget binary
-                  cd /tmp && curl -fsSL "https://ftp.gnu.org/gnu/wget/wget-1.21.4.tar.gz" -o wget.tar.gz 2>/dev/null && tar -xzf wget.tar.gz && cd wget-* && ./configure --prefix=/usr/local && make -j$(nproc) && sudo make install 2>&1 | tail -5 || echo "ERROR: wget installation from source failed"
-                  ;;
                 firewall-cmd)
                   # firewalld is typically pre-installed on Oracle Linux, try starting service
                   echo "firewall-cmd not found - attempting to start firewalld service..."
                   sudo systemctl enable --now firewalld 2>/dev/null || echo "Warning: Could not start firewalld service"
+                  ;;
+                *)
+                  echo "ERROR: Required command '$cmd' not available. Please ensure Oracle Linux base image includes git, curl, wget"
+                  exit 1
                   ;;
               esac
             else
