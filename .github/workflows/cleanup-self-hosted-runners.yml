@@ -1,0 +1,203 @@
+name: Cleanup Self-Hosted Runners on Oracle Compute
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: choice
+        options:
+          - production
+        default: 'production'
+      runner-names:
+        description: 'Specific runner names to remove (comma-separated, leave empty to remove all oracle runners)'
+        type: string
+        required: false
+      force:
+        description: 'Force removal without confirmation'
+        type: boolean
+        default: false
+        required: false
+
+jobs:
+  cleanup-runners:
+    name: Cleanup Self-Hosted Runners on OCI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+      RUNNER_NAMES: ${{ github.event.inputs.runner-names }}
+      FORCE: ${{ github.event.inputs.force }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          
+          key="${ORACLE_SSH_KEY}"
+          key=$(echo "$key" | tr -d '[:space:]')
+          
+          echo "$key" | base64 -d > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          
+          echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+          ssh-keyscan -H -T 10 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed"
+          
+          chmod 644 ~/.ssh/known_hosts
+          echo "SSH key setup successful"
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+
+      - name: Test SSH connection
+        run: |
+          ssh -i ~/.ssh/oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
+
+      - name: Get runners to remove from GitHub
+        id: get-runners
+        run: |
+          echo "=== Getting list of runners from GitHub ==="
+          
+          if [ -n "${RUNNER_NAMES}" ]; then
+            # Use specific runner names provided
+            RUNNER_LIST="${RUNNER_NAMES}"
+            echo "Using provided runner names: ${RUNNER_LIST}"
+          else
+            # Get all oracle runners from GitHub
+            RUNNER_LIST=$(curl -s -H "Authorization: token ${GH_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runners" \
+              | jq -r '.runners[] | select(.name | startswith("oracle-runner")) | .name' | tr '\n' ',' | sed 's/,$//')
+            
+            if [ -z "${RUNNER_LIST}" ]; then
+              echo "No oracle runners found in GitHub"
+              echo "runners=" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
+            echo "Found oracle runners: ${RUNNER_LIST}"
+          fi
+          
+          echo "runners=${RUNNER_LIST}" >> $GITHUB_OUTPUT
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          RUNNER_NAMES: ${{ github.event.inputs.runner-names }}
+
+      - name: Remove runners from GitHub
+        if: steps.get-runners.outputs.runners != ''
+        run: |
+          RUNNER_LIST="${{ steps.get-runners.outputs.runners }}"
+          
+          IFS=',' read -ra RUNNERS <<< "${RUNNER_LIST}"
+          
+          for RUNNER_NAME in "${RUNNERS[@]}"; do
+            echo "=== Removing runner: ${RUNNER_NAME} ==="
+            
+            # Get runner ID
+            RUNNER_ID=$(curl -s -H "Authorization: token ${GH_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runners" \
+              | jq -r ".runners[] | select(.name == \"${RUNNER_NAME}\") | .id")
+            
+            if [ -z "${RUNNER_ID}" ] || [ "${RUNNER_ID}" = "null" ]; then
+              echo "Runner ${RUNNER_NAME} not found in GitHub, skipping..."
+              continue
+            fi
+            
+            echo "Found runner ID: ${RUNNER_ID}"
+            
+            # Remove runner from GitHub
+            RESPONSE=$(curl -s -w "%{http_code}" -o /dev/null -X DELETE \
+              -H "Authorization: token ${GH_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runners/${RUNNER_ID}")
+            
+            if [ "${RESPONSE}" = "204" ]; then
+              echo "Successfully removed runner ${RUNNER_NAME} from GitHub"
+            else
+              echo "Failed to remove runner ${RUNNER_NAME} from GitHub (HTTP ${RESPONSE})"
+            fi
+          done
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Create runner cleanup script
+        if: steps.get-runners.outputs.runners != ''
+        run: |
+          cat > /tmp/cleanup-runners.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          ORACLE_USER="${ORACLE_USER}"
+          DEPLOY_PATH="${DEPLOY_PATH}"
+          RUNNER_NAMES="${RUNNER_NAMES}"
+          
+          echo "=== Cleaning up runners on Oracle instance ==="
+          
+          RUNNER_DIR="${DEPLOY_PATH}/github-runners"
+          
+          if [ ! -d "${RUNNER_DIR}" ]; then
+            echo "Runner directory not found: ${RUNNER_DIR}"
+            exit 0
+          fi
+          
+          # If specific runner names provided, clean those; otherwise clean all
+          if [ -n "${RUNNER_NAMES}" ]; then
+            IFS=',' read -ra RUNNERS <<< "${RUNNER_NAMES}"
+            for RUNNER_NAME in "${RUNNERS[@]}"; do
+              # Find the runner directory by name pattern
+              RUNNER_INSTANCE_DIR=$(find "${RUNNER_DIR}" -maxdepth 1 -type d -name "runner-*" | while read dir; do
+                if sudo -u "${ORACLE_USER}" bash -c "cd ${dir} && ./config.sh --help" 2>/dev/null | grep -q "${RUNNER_NAME}"; then
+                  echo "${dir}"
+                  break
+                fi
+              done)
+              
+              if [ -n "${RUNNER_INSTANCE_DIR}" ] && [ -d "${RUNNER_INSTANCE_DIR}" ]; then
+                echo "Stopping and removing runner: ${RUNNER_NAME} at ${RUNNER_INSTANCE_DIR}"
+                sudo "${RUNNER_INSTANCE_DIR}/svc.sh" stop 2>/dev/null || true
+                sudo "${RUNNER_INSTANCE_DIR}/svc.sh" uninstall 2>/dev/null || true
+                sudo -u "${ORACLE_USER}" bash -c "cd ${RUNNER_INSTANCE_DIR} && ./config.sh remove --unattended --token dummy" 2>/dev/null || true
+                sudo rm -rf "${RUNNER_INSTANCE_DIR}"
+              else
+                echo "Runner directory not found for: ${RUNNER_NAME}"
+              fi
+            done
+          else
+            # Remove all runners
+            for RUNNER_INSTANCE_DIR in "${RUNNER_DIR}"/runner-*; do
+              if [ -d "${RUNNER_INSTANCE_DIR}" ]; then
+                echo "Stopping and removing runner at: ${RUNNER_INSTANCE_DIR}"
+                sudo "${RUNNER_INSTANCE_DIR}/svc.sh" stop 2>/dev/null || true
+                sudo "${RUNNER_INSTANCE_DIR}/svc.sh" uninstall 2>/dev/null || true
+                sudo -u "${ORACLE_USER}" bash -c "cd ${RUNNER_INSTANCE_DIR} && ./config.sh remove --unattended --token dummy" 2>/dev/null || true
+                sudo rm -rf "${RUNNER_INSTANCE_DIR}"
+              fi
+            done
+            
+            # Remove base runner directory
+            sudo rm -rf "${RUNNER_DIR}"
+          fi
+          
+          echo "=== Runner cleanup complete ==="
+          EOF
+          
+          chmod +x /tmp/cleanup-runners.sh
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 /tmp/cleanup-runners.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/cleanup-runners.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export ORACLE_USER='${{ env.ORACLE_USER }}' && export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' && export RUNNER_NAMES='${{ steps.get-runners.outputs.runners }}' && chmod +x /tmp/cleanup-runners.sh && /tmp/cleanup-runners.sh"
+          rm /tmp/cleanup-runners.sh
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Cleanup summary
+        run: |
+          echo "## Self-Hosted Runner Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ github.event.inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Oracle Host | ${{ env.ORACLE_HOST }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runners Removed | ${{ steps.get-runners.outputs.runners }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cleanup Time | $(date -u) |" >> $GITHUB_STEP_SUMMARY

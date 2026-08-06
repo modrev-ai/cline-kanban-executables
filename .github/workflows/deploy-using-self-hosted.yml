@@ -1,0 +1,73 @@
+name: Deploy Using Self-Hosted Runners
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: choice
+        options:
+          - production
+        default: 'production'
+      use-self-hosted:
+        description: 'Use self-hosted runners instead of GitHub-hosted'
+        type: boolean
+        default: true
+        required: false
+
+jobs:
+  validate-yaml:
+    name: Validate YAML Syntax
+    uses: ./.github/workflows/validate-yaml.yml
+    secrets: inherit
+
+  build-package:
+    name: Build and Package Artifacts
+    needs: validate-yaml
+    uses: ./.github/workflows/build-package.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+    secrets: inherit
+
+  auth-setup:
+    name: Setup SSH and Environment
+    needs: validate-yaml
+    uses: ./.github/workflows/auth-setup.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+    secrets: inherit
+
+  deploy-infrastructure:
+    name: Deploy Infrastructure to OCI
+    needs: auth-setup
+    # Use self-hosted runners if requested
+    runs-on: ${{ github.event.inputs.use-self-hosted && '[self-hosted, oracle, linux]' || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    uses: ./.github/workflows/deploy-infrastructure.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      deploy-infrastructure: true
+    secrets: inherit
+
+  deploy-to-oci:
+    name: Deploy Files to OCI
+    needs: [build-package, auth-setup, deploy-infrastructure]
+    # Use self-hosted runners if requested
+    runs-on: ${{ github.event.inputs.use-self-hosted && '[self-hosted, oracle, linux]' || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    uses: ./.github/workflows/deploy-to-oci.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      deploy-infrastructure: true
+    secrets: inherit
+
+  health-check:
+    name: Verify Deployment Health
+    needs: deploy-to-oci
+    # Use self-hosted runners if requested
+    runs-on: ${{ github.event.inputs.use-self-hosted && '[self-hosted, oracle, linux]' || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    uses: ./.github/workflows/health-check.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+    secrets: inherit

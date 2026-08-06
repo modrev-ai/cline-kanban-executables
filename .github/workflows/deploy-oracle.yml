@@ -1,0 +1,70 @@
+name: Deploy to Oracle Compute
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: choice
+        options:
+          - production
+        default: 'production'
+      force:
+        description: 'Force deployment even if no changes'
+        type: boolean
+        default: false
+        required: false
+      deploy-infrastructure:
+        description: 'Deploy infrastructure (Node.js, services, firewall) before app deployment'
+        type: boolean
+        default: true
+        required: false
+
+jobs:
+  validate-yaml:
+    name: Validate YAML Syntax
+    uses: ./.github/workflows/validate-yaml.yml
+    secrets: inherit
+
+  build-package:
+    name: Build and Package Artifacts
+    needs: validate-yaml
+    uses: ./.github/workflows/build-package.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      force: ${{ fromJson(github.event.inputs.force) }}
+    secrets: inherit
+
+  auth-setup:
+    name: Setup SSH and Environment
+    needs: validate-yaml
+    uses: ./.github/workflows/auth-setup.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+    secrets: inherit
+
+  deploy-infrastructure:
+    name: Deploy Infrastructure to OCI
+    needs: auth-setup
+    uses: ./.github/workflows/deploy-infrastructure.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      deploy-infrastructure: ${{ fromJson(github.event.inputs.deploy-infrastructure) }}
+    secrets: inherit
+
+  deploy-to-oci:
+    name: Deploy Files to OCI
+    needs: [build-package, auth-setup, deploy-infrastructure]
+    uses: ./.github/workflows/deploy-to-oci.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      deploy-infrastructure: ${{ fromJson(github.event.inputs.deploy-infrastructure) }}
+    secrets: inherit
+
+  health-check:
+    name: Verify Deployment Health
+    needs: deploy-to-oci
+    uses: ./.github/workflows/health-check.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+    secrets: inherit

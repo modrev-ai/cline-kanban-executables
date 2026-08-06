@@ -1,0 +1,227 @@
+name: Deploy to Oracle Compute
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        required: true
+      artifact-name:
+        description: 'Name of the artifact to download'
+        type: string
+        required: false
+        default: 'deployment-artifacts'
+      deploy-infrastructure:
+        description: 'Whether infrastructure was deployed (services exist)'
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      ORACLE_HOST:
+        description: 'Oracle Compute instance public IP or hostname'
+        required: true
+      ORACLE_USER:
+        description: 'SSH username for Oracle instance (typically opc)'
+        required: true
+      DEPLOY_PATH:
+        description: 'Remote deployment path on Oracle instance'
+        required: true
+      ORACLE_SSH_KEY_B64:
+        description: 'Base64-encoded SSH private key for Oracle instance'
+        required: true
+      GH_PAT:
+        description: 'GitHub Personal Access Token for private repo access'
+        required: false
+
+jobs:
+  deploy:
+    name: Deploy Files to OCI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+      DEPLOY_INFRASTRUCTURE: ${{ inputs.deploy-infrastructure }}
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          
+          # Decode base64 SSH key - remove any whitespace/newlines from secret
+          key="${ORACLE_SSH_KEY}"
+          key=$(echo "$key" | tr -d '[:space:]')
+          
+          echo "$key" | base64 -d > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          
+          # Add host to known_hosts
+          echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+          ssh-keyscan -H -T 10 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
+          
+          chmod 644 ~/.ssh/known_hosts
+          echo "SSH key setup successful"
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+
+      - name: Test SSH connection
+        run: |
+          ssh -i ~/.ssh/oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
+
+      - name: Download deployment artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: deploy-staging
+
+      - name: Deploy all files via SCP (single transfer)
+        run: |
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -r deploy-staging/prod_executable "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts deploy-staging/start-all.bat deploy-staging/start-all.ps1 deploy-staging/start-all-with-tailscale.bat deploy-staging/start-all-with-tailscale.ps1 deploy-staging/README.md "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x ${{ env.DEPLOY_PATH }}/prod_executable/cline-remote-launch.sh"
+
+      - name: Restart services after deployment
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
+        run: |
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" << 'ENDSSH'
+            set -euo pipefail
+            echo "=== Restarting services after deployment ==="
+            
+            # Debug: Check service files exist
+            echo "Checking service files..."
+            ls -la /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || echo "WARNING: Service files not found!"
+            
+            # Debug: Check deployment files
+            echo "Checking deployment files..."
+            ls -la "${{ env.DEPLOY_PATH }}/prod_executable/kanban-proxy.js" 2>/dev/null || echo "WARNING: kanban-proxy.js not found!"
+            which cline 2>/dev/null || echo "WARNING: cline not in PATH!"
+            cline --version 2>/dev/null || echo "WARNING: cline version check failed!"
+            
+            # Fix SELinux context if needed
+            sudo restorecon -v /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || true
+            
+            sudo systemctl daemon-reload
+            
+            # Check if services exist
+            if systemctl list-unit-files | grep -q "kanban-proxy.service"; then
+              echo "Services exist, restarting in correct order (kanban-server first, then kanban-proxy)..."
+              sudo systemctl restart kanban-server
+              sleep 3
+              sudo systemctl restart kanban-proxy
+            else
+              echo "Services don't exist, enabling and starting in correct order..."
+              sudo systemctl enable kanban-server kanban-proxy
+              sudo systemctl start kanban-server
+              sleep 3
+              sudo systemctl start kanban-proxy
+            fi
+            
+            # Immediate status check
+            echo "=== Immediate service status after start ==="
+            sudo systemctl status kanban-proxy --no-pager -l
+            sudo systemctl status kanban-server --no-pager -l
+            echo "=== kanban-proxy logs (immediate) ==="
+            journalctl -u kanban-proxy --no-pager -l -n 50
+            echo "=== kanban-server logs (immediate) ==="
+            journalctl -u kanban-server --no-pager -l -n 50
+            echo "=== Listening ports ==="
+            ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
+            
+            echo "=== Verifying services restarted ==="
+            maxRetries=12
+            retryDelay=5
+            
+            for i in $(seq 1 $maxRetries); do
+              echo "Attempt $i of $maxRetries: Checking service status..."
+              
+              proxyActive=false
+              serverActive=false
+              proxyHttpReady=false
+              serverHttpReady=false
+              
+              if systemctl is-active --quiet kanban-proxy; then
+                proxyActive=true
+              else
+                echo "kanban-proxy not active, status:"
+                sudo systemctl status kanban-proxy --no-pager -l
+                echo "kanban-proxy logs:"
+                journalctl -u kanban-proxy --no-pager -l -n 30
+              fi
+              
+              if systemctl is-active --quiet kanban-server; then
+                serverActive=true
+              else
+                echo "kanban-server not active, status:"
+                sudo systemctl status kanban-server --no-pager -l
+                echo "kanban-server logs:"
+                journalctl -u kanban-server --no-pager -l -n 30
+              fi
+              
+              # Also verify HTTP connectivity
+              if [ "$proxyActive" = true ]; then
+                if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 3 2>/dev/null | grep -q "200"; then
+                  proxyHttpReady=true
+                else
+                  echo "kanban-proxy HTTP check failed on port 3484"
+                  echo "--- kanban-proxy recent logs ---"
+                  journalctl -u kanban-proxy --no-pager -l -n 50
+                  echo "--- Checking listening ports ---"
+                  ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
+                fi
+              fi
+              
+              if [ "$serverActive" = true ]; then
+                if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 3 2>/dev/null | grep -q "200"; then
+                  serverHttpReady=true
+                else
+                  echo "kanban-server HTTP check failed on port 3485"
+                  echo "--- kanban-server recent logs ---"
+                  journalctl -u kanban-server --no-pager -l -n 50
+                  echo "--- Checking listening ports ---"
+                  ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
+                fi
+              fi
+              
+              if [ "$proxyActive" = true ] && [ "$serverActive" = true ] && [ "$proxyHttpReady" = true ] && [ "$serverHttpReady" = true ]; then
+                echo "=== Both services are active and HTTP-ready ==="
+                break
+              fi
+              
+              if [ $i -lt $maxRetries ]; then
+                echo "Services not ready yet. Waiting $retryDelay seconds before retry..."
+                sleep $retryDelay
+              fi
+            done
+            
+            # Final verification
+            if ! systemctl is-active --quiet kanban-proxy; then
+              echo "ERROR: kanban-proxy not active after $maxRetries attempts" >&2
+              sudo systemctl status kanban-proxy --no-pager -l
+              journalctl -u kanban-proxy --no-pager -l -n 50
+              exit 1
+            fi
+            
+            if ! systemctl is-active --quiet kanban-server; then
+              echo "ERROR: kanban-server not active after $maxRetries attempts" >&2
+              sudo systemctl status kanban-server --no-pager -l
+              journalctl -u kanban-server --no-pager -l -n 50
+              exit 1
+            fi
+            
+            # Final HTTP verification
+            if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 3 2>/dev/null | grep -q "200"; then
+              echo "ERROR: kanban-proxy not responding to HTTP on port 3484" >&2
+              exit 1
+            fi
+            
+            if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 3 2>/dev/null | grep -q "200"; then
+              echo "ERROR: kanban-server not responding to HTTP on port 3485" >&2
+              exit 1
+            fi
+            
+            echo "=== Services restarted successfully and HTTP-ready ==="
+            systemctl status kanban-proxy --no-pager -l
+            systemctl status kanban-server --no-pager -l
+          ENDSSH

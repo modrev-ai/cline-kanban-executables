@@ -1,0 +1,104 @@
+name: Build and Package Artifacts
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        required: true
+      force:
+        description: 'Force deployment even if no changes'
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      artifact-path:
+        description: 'Path to the packaged artifacts'
+        value: ${{ jobs.build.outputs.artifact-path }}
+      deploy-files:
+        description: 'List of files to deploy'
+        value: ${{ jobs.build.outputs.deploy-files }}
+
+jobs:
+  build:
+    name: Build and Package
+    runs-on: windows-latest
+    outputs:
+      artifact-path: ${{ steps.package.outputs.artifact-path }}
+      deploy-files: ${{ steps.package.outputs.deploy-files }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify source files exist
+        id: verify
+        run: |
+          $files = @(
+            "prod_executable/cline-remote-launch.ps1",
+            "prod_executable/cline-remote-launch.sh",
+            "prod_executable/kanban-proxy.js",
+            "start/start-all.bat",
+            "start/start-all.ps1",
+            "start/start-all-with-tailscale.bat",
+            "start/start-all-with-tailscale.ps1",
+            "README.md"
+          )
+          
+          $missing = @()
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) {
+              $missing += $file
+            }
+          }
+          
+          if ($missing.Count -gt 0) {
+            Write-Error "Missing required files: $($missing -join ', ')"
+            exit 1
+          }
+          
+          Write-Host "All source files verified"
+        shell: pwsh
+
+      - name: Package artifacts
+        id: package
+        run: |
+          # Create a staging directory for deployment
+          $stagingDir = "deploy-staging"
+          if (Test-Path $stagingDir) {
+            Remove-Item -Recurse -Force $stagingDir
+          }
+          New-Item -ItemType Directory -Path $stagingDir | Out-Null
+          New-Item -ItemType Directory -Path "$stagingDir/prod_executable" | Out-Null
+          
+          # Copy prod_executable files
+          Copy-Item -Path "prod_executable/*" -Destination "$stagingDir/prod_executable/" -Recurse -Force
+          
+          # Copy start scripts
+          Copy-Item -Path "start/start-all.bat", "start/start-all.ps1", "start/start-all-with-tailscale.bat", "start/start-all-with-tailscale.ps1" -Destination "$stagingDir/" -Force
+          
+          # Copy README
+          Copy-Item -Path "README.md" -Destination "$stagingDir/" -Force
+          
+          # Make shell scripts executable
+          if (Test-Path "$stagingDir/prod_executable/cline-remote-launch.sh") {
+            # On Windows, we'll handle permissions on the target
+          }
+          
+          # Output the list of files to deploy
+          $deployFiles = Get-ChildItem -Path $stagingDir -Recurse -File | ForEach-Object { $_.FullName.Substring($stagingDir.Length + 1) }
+          $deployFilesJson = $deployFiles | ConvertTo-Json -Compress
+          
+          echo "artifact-path=$stagingDir" >> $env:GITHUB_OUTPUT
+          echo "deploy-files=$deployFilesJson" >> $env:GITHUB_OUTPUT
+          
+          Write-Host "Packaged artifacts in $stagingDir"
+          Write-Host "Files to deploy: $deployFilesJson"
+        shell: pwsh
+
+      - name: Upload deployment artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-artifacts
+          path: deploy-staging/
+          retention-days: 1

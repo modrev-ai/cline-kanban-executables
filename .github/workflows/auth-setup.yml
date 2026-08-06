@@ -1,0 +1,57 @@
+name: OCI Authentication and Environment Setup
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        required: true
+    secrets:
+      ORACLE_HOST:
+        description: 'Oracle Compute instance public IP or hostname'
+        required: true
+      ORACLE_USER:
+        description: 'SSH username for Oracle instance (typically opc)'
+        required: true
+      ORACLE_SSH_KEY_B64:
+        description: 'Base64-encoded SSH private key for Oracle instance'
+        required: true
+      DEPLOY_PATH:
+        description: 'Remote deployment path on Oracle instance'
+        required: true
+
+jobs:
+  auth:
+    name: Setup SSH and Environment
+    runs-on: ubuntu-latest
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          
+          # Decode base64 SSH key - remove any whitespace/newlines from secret
+          key="${ORACLE_SSH_KEY}"
+          key=$(echo "$key" | tr -d '[:space:]')
+          
+          echo "$key" | base64 -d > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          
+          # Add host to known_hosts
+          echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+          ssh-keyscan -H -T 30 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
+          
+          echo "SSH key setup successful"
+
+      - name: Test SSH connection
+        run: |
+          ssh -i ~/.ssh/oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
+
+      - name: Create deploy directory on Oracle
+        run: |
+          ssh -i ~/.ssh/oracle_key "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "mkdir -p ${{ env.DEPLOY_PATH }}/prod_executable"

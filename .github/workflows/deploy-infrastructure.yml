@@ -1,0 +1,349 @@
+name: Deploy Infrastructure to Oracle Compute
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        required: true
+      deploy-infrastructure:
+        description: 'Deploy infrastructure (Node.js, services, firewall) before app deployment'
+        type: boolean
+        default: true
+        required: false
+    secrets:
+      ORACLE_HOST:
+        description: 'Oracle Compute instance public IP or hostname'
+        required: true
+      ORACLE_USER:
+        description: 'SSH username for Oracle instance (typically opc)'
+        required: true
+      ORACLE_SSH_KEY_B64:
+        description: 'Base64-encoded SSH private key for Oracle instance'
+        required: true
+      DEPLOY_PATH:
+        description: 'Remote deployment path on Oracle instance'
+        required: true
+      GH_PAT:
+        description: 'GitHub Personal Access Token for private repo access'
+        required: false
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        required: true
+        default: 'production'
+      deploy-infrastructure:
+        description: 'Deploy infrastructure (Node.js, services, firewall) before app deployment'
+        type: boolean
+        default: true
+        required: false
+
+jobs:
+  deploy-infrastructure:
+    name: Deploy Infrastructure to OCI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+      DEPLOY_INFRASTRUCTURE: ${{ inputs.deploy-infrastructure }}
+    steps:
+      - name: Setup SSH key
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
+        run: |
+          mkdir -p ~/.ssh
+          
+          # Decode base64 SSH key - remove any whitespace/newlines from secret
+          key="${ORACLE_SSH_KEY}"
+          key=$(echo "$key" | tr -d '[:space:]')
+          
+          echo "$key" | base64 -d > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          
+          # Add host to known_hosts
+          echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+          ssh-keyscan -H -T 10 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
+          
+          chmod 644 ~/.ssh/known_hosts
+          echo "SSH key setup successful"
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+
+      - name: Test SSH connection
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
+        run: |
+          ssh -i ~/.ssh/oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
+
+      - name: Deploy infrastructure (packages, Node.js, firewall, services) - Single SSH session
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
+        run: |
+          cat > /tmp/deploy-infra.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          ORACLE_USER="${ORACLE_USER}"
+          DEPLOY_PATH="${DEPLOY_PATH}"
+          
+          echo "=== [1/4] Verifying system packages (using pre-installed binaries, no dnf) ==="
+          # Oracle Linux typically has git, curl, wget, firewalld pre-installed
+          # Verify they exist instead of installing via dnf (avoids slow repo metadata updates)
+          for cmd in git curl wget firewall-cmd; do
+            if ! command -v "$cmd" &> /dev/null; then
+              echo "WARNING: $cmd not found - Oracle Linux should have these pre-installed"
+              case "$cmd" in
+                firewall-cmd)
+                  # firewalld is typically pre-installed on Oracle Linux, try starting service
+                  echo "firewall-cmd not found - attempting to start firewalld service..."
+                  sudo systemctl enable --now firewalld 2>/dev/null || echo "Warning: Could not start firewalld service"
+                  ;;
+                *)
+                  echo "ERROR: Required command '$cmd' not available. Please ensure Oracle Linux base image includes git, curl, wget"
+                  exit 1
+                  ;;
+              esac
+            else
+              echo "$cmd is available"
+            fi
+          done
+          
+          echo "=== [2/4] Configuring swap (4GB) ==="
+          if [ ! -f /swapfile ]; then
+            # Use dd with status=none for faster swap creation, fallocate as fallback
+            sudo dd if=/dev/zero of=/swapfile bs=1M count=4096 status=none 2>/dev/null || sudo fallocate -l 4G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab >/dev/null
+          else
+            CURRENT_SIZE=$(stat -c%s /swapfile 2>/dev/null || echo 0)
+            if [ "$CURRENT_SIZE" -lt 4294967296 ]; then
+              sudo swapoff /swapfile
+              sudo dd if=/dev/zero of=/swapfile bs=1M count=4096 status=none 2>/dev/null || sudo fallocate -l 4G /swapfile
+              sudo chmod 600 /swapfile
+              sudo mkswap /swapfile
+              sudo swapon /swapfile
+            fi
+          fi
+          
+          echo "=== [3/4] Installing Node.js 22 via binary download (fastest, no repo updates) ==="
+          # Remove any existing nodejs to avoid conflicts (using direct binary removal, no dnf)
+          sudo rm -f /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
+          sudo rm -rf /usr/local/lib/nodejs 2>/dev/null || true
+          sudo rm -rf /usr/lib/node_modules 2>/dev/null || true
+          # Also remove any dnf-installed nodejs if present (but don't use dnf to do it)
+          sudo rpm -e --nodeps nodejs npm 2>/dev/null || true
+          
+# Download and install Node.js 22 binary directly (bypasses NodeSource repo entirely)
+NODE_VERSION="22.14.0"
+ARCH="x64"
+cd /tmp
+echo "Downloading Node.js ${NODE_VERSION} binary..."
+# Use retry logic with resume capability and longer timeout for unreliable connections
+curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 120 --connect-timeout 30 --max-time 180 \
+  "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o node.tar.xz
+
+# Verify download completed successfully
+if [ ! -f node.tar.xz ] || [ ! -s node.tar.xz ]; then
+  echo "ERROR: Node.js download failed or file is empty"
+  exit 1
+fi
+
+# Verify it's a valid xz file
+if ! file node.tar.xz | grep -q "XZ compressed data"; then
+  echo "ERROR: Downloaded file is not a valid XZ archive"
+  echo "File type: $(file node.tar.xz)"
+  echo "File size: $(stat -c%s node.tar.xz) bytes"
+  exit 1
+fi
+
+tar -xf node.tar.xz
+          sudo rm -rf /usr/local/lib/nodejs
+          sudo mkdir -p /usr/local/lib/nodejs
+          sudo mv "node-v${NODE_VERSION}-linux-${ARCH}" /usr/local/lib/nodejs/node-v${NODE_VERSION}
+          
+          # Create symlinks
+          sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/node /usr/bin/node
+          sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npm /usr/bin/npm
+          sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npx /usr/bin/npx
+          
+          # Verify installation
+          /usr/bin/node --version
+          /usr/bin/npm --version
+          
+          NODE_MAJOR=$(/usr/bin/node --version | sed 's/v\([0-9]*\).*/\1/')
+          if [ "$NODE_MAJOR" -lt 22 ]; then
+            echo "ERROR: Node.js version is $NODE_MAJOR, but version 22 or higher is required"
+            exit 1
+          fi
+          echo "Node.js version $NODE_MAJOR meets requirement (>= 22)"
+          
+          echo "=== [4/4] Configuring npm, installing global packages, firewall, and services ==="
+          # Configure npm for speed
+          sudo npm config set prefer-offline true
+          sudo npm config set audit false
+          sudo npm config set fund false
+          sudo npm config set maxsockets 1
+          
+          # Configure git
+          sudo git config --global url."https://github.com/".insteadOf "git@github.com:"
+          sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          
+          echo "=== Installing http-proxy, cline, and kanban as ORACLE_USER (not root) ==="
+          # Configure npm for ORACLE_USER
+          sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm config set prefer-offline true && npm config set audit false && npm config set fund false && npm config set maxsockets 1'
+          
+          # Install http-proxy
+          echo "=== Installing http-proxy ==="
+          sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=1' 2>&1
+          
+          echo "=== Installing cline from modrev-ai/cline ==="
+          CLINE_VERSION=$(python3 -c "import urllib.request, json; data = json.load(urllib.request.urlopen('https://api.github.com/repos/modrev-ai/cline/releases/latest')); print(data['tag_name'])")
+          echo "Latest cline version: $CLINE_VERSION"
+          sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1
+          
+          echo "=== Installing kanban package globally (required for 'cline kanban') ==="
+          sudo -u "${ORACLE_USER}" bash -c 'npm install -g kanban --omit=optional --maxsockets=1' 2>&1
+          
+          echo "=== Creating cline symlink ==="
+          sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
+          sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
+          
+          echo "=== Verifying installation ==="
+          node --version
+          npm --version
+          cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
+          cline kanban --help 2>&1 | head -5 || echo "cline kanban help check completed"
+          
+          echo "=== Verifying global packages installed correctly ==="
+          npm list -g http-proxy --depth=0
+          npm list -g kanban --depth=0
+          npm list -g cline --depth=0
+          
+          echo "=== Configuring firewalld (single pass, no retries) ==="
+          # Check if firewalld is installed
+          if ! command -v firewall-cmd &> /dev/null; then
+            echo "firewall-cmd not found, attempting to start firewalld service directly..."
+            # firewalld is typically pre-installed on Oracle Linux, just start it
+            sudo systemctl enable --now firewalld 2>/dev/null || echo "Warning: Could not start firewalld service"
+            sleep 2
+          fi
+          
+          # Start and enable firewalld if not running
+          if ! systemctl is-active --quiet firewalld; then
+            echo "firewalld not running, starting and enabling..."
+            sudo systemctl enable --now firewalld
+            # Wait for firewalld to be ready
+            sleep 2
+          fi
+          
+          # Add ports to firewalld (single attempt, continue on failure)
+          for port in 3484 3485; do
+            sudo firewall-cmd --permanent --add-port=${port}/tcp 2>/dev/null && echo "Added port ${port}/tcp to firewalld (permanent)" || echo "Warning: Failed to add port ${port}/tcp permanently"
+          done
+          
+          # Reload firewalld (single attempt)
+          sudo firewall-cmd --reload 2>/dev/null && echo "firewalld reloaded successfully" || echo "Warning: firewalld reload failed"
+          
+          echo "=== Configuring iptables as fallback ==="
+          sudo iptables -I INPUT -p tcp --dport 3484 -j ACCEPT 2>/dev/null || true
+          sudo iptables -I INPUT -p tcp --dport 3485 -j ACCEPT 2>/dev/null || true
+          
+          echo "=== Saving iptables rules ==="
+          sudo mkdir -p /etc/iptables
+          sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true
+          
+          echo "=== Creating systemd service files ==="
+          echo "=== Creating kanban-proxy service ==="
+          sudo tee /etc/systemd/system/kanban-proxy.service > /dev/null << SVC_EOF
+          [Unit]
+          Description=Kanban Header Rewriting Proxy
+          After=network.target kanban-server.service
+          Requires=kanban-server.service
+          
+          [Service]
+          Type=simple
+          User=${ORACLE_USER}
+          WorkingDirectory=${DEPLOY_PATH}/prod_executable
+          Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
+          ExecStart=/usr/bin/node kanban-proxy.js
+          Restart=on-failure
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          
+          [Install]
+          WantedBy=multi-user.target
+          SVC_EOF
+          
+          echo "=== Creating kanban-server service ==="
+          sudo tee /etc/systemd/system/kanban-server.service > /dev/null << SVC_EOF
+          [Unit]
+          Description=Kanban Server (Cline)
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=${ORACLE_USER}
+          WorkingDirectory=${DEPLOY_PATH}
+          Environment=KANBAN_RUNTIME_HOST=127.0.0.1
+          Environment=KANBAN_RUNTIME_PORT=3485
+          Environment=NODE_ENV=production
+          Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
+          ExecStart=/usr/bin/cline kanban
+          Restart=on-failure
+          RestartSec=10
+          StandardOutput=journal
+          StandardError=journal
+          
+          [Install]
+          WantedBy=multi-user.target
+          SVC_EOF
+          
+          echo "=== Fixing SELinux context for service files ==="
+          sudo restorecon -v /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service
+          
+          echo "=== Reloading systemd ==="
+          sudo systemctl daemon-reload
+          
+          echo "=== Verifying unit files syntax ==="
+          sudo systemd-analyze verify /etc/systemd/system/kanban-proxy.service
+          sudo systemd-analyze verify /etc/systemd/system/kanban-server.service
+          
+          echo "=== Verifying unit files loaded ==="
+          systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found after daemon-reload" && exit 1)
+          
+          echo "=== Service files created successfully ==="
+          cat /etc/systemd/system/kanban-proxy.service
+          cat /etc/systemd/system/kanban-server.service
+          
+          echo "=== Infrastructure deployment complete ==="
+          EOF
+          
+          chmod +x /tmp/deploy-infra.sh
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 /tmp/deploy-infra.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/deploy-infra.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export ORACLE_USER='${{ env.ORACLE_USER }}' && export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' && chmod +x /tmp/deploy-infra.sh && /tmp/deploy-infra.sh"
+          rm /tmp/deploy-infra.sh
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Verify infrastructure deployment (single quick check)
+        if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
+        run: |
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -o ConnectTimeout=30 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" '
+            set -euo pipefail
+            echo "=== Quick infrastructure verification ==="
+            node --version
+            npm --version
+            cline --version || echo "cline check failed"
+            npm list -g http-proxy --depth=0 2>/dev/null || echo "http-proxy not in global list"
+            systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found" && exit 1)
+            sudo systemd-analyze verify /etc/systemd/system/kanban-proxy.service
+            sudo systemd-analyze verify /etc/systemd/system/kanban-server.service
+            sudo firewall-cmd --list-ports 2>/dev/null | grep -E "3484|3485" || echo "Firewall ports check (may need manual verification)"
+            echo "=== Infrastructure verification complete ==="
+          '
