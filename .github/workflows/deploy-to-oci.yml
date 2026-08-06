@@ -97,6 +97,7 @@ jobs:
             echo "Checking deployment files..."
             ls -la "${{ env.DEPLOY_PATH }}/prod_executable/kanban-proxy.js" 2>/dev/null || echo "WARNING: kanban-proxy.js not found!"
             which cline 2>/dev/null || echo "WARNING: cline not in PATH!"
+            cline --version 2>/dev/null || echo "WARNING: cline version check failed!"
             
             # Fix SELinux context if needed
             sudo restorecon -v /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || true
@@ -113,8 +114,19 @@ jobs:
               sudo systemctl start kanban-proxy kanban-server
             fi
             
+            # Immediate status check
+            echo "=== Immediate service status after start ==="
+            sudo systemctl status kanban-proxy --no-pager -l
+            sudo systemctl status kanban-server --no-pager -l
+            echo "=== kanban-proxy logs (immediate) ==="
+            journalctl -u kanban-proxy --no-pager -l -n 50
+            echo "=== kanban-server logs (immediate) ==="
+            journalctl -u kanban-server --no-pager -l -n 50
+            echo "=== Listening ports ==="
+            ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
+            
             echo "=== Verifying services restarted ==="
-            maxRetries=8
+            maxRetries=12
             retryDelay=5
             
             for i in $(seq 1 $maxRetries); do
@@ -149,6 +161,10 @@ jobs:
                   proxyHttpReady=true
                 else
                   echo "kanban-proxy HTTP check failed on port 3484"
+                  echo "--- kanban-proxy recent logs ---"
+                  journalctl -u kanban-proxy --no-pager -l -n 50
+                  echo "--- Checking listening ports ---"
+                  ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
                 fi
               fi
               
@@ -157,6 +173,10 @@ jobs:
                   serverHttpReady=true
                 else
                   echo "kanban-server HTTP check failed on port 3485"
+                  echo "--- kanban-server recent logs ---"
+                  journalctl -u kanban-server --no-pager -l -n 50
+                  echo "--- Checking listening ports ---"
+                  ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
                 fi
               fi
               
