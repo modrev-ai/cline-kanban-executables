@@ -85,7 +85,7 @@ jobs:
       - name: Restart services after deployment
         if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" '
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" << 'ENDSSH'
             set -euo pipefail
             echo "=== Restarting services after deployment ==="
             
@@ -200,4 +200,4 @@ jobs:
             echo "=== Services restarted successfully and HTTP-ready ==="
             systemctl status kanban-proxy --no-pager -l
             systemctl status kanban-server --no-pager -l
-          '
+ENDSSH
