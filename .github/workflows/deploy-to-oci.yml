@@ -38,7 +38,7 @@ jobs:
   deploy:
     name: Deploy Files to OCI
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
@@ -46,12 +46,6 @@ jobs:
       ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
       DEPLOY_INFRASTRUCTURE: ${{ inputs.deploy-infrastructure }}
     steps:
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
@@ -65,16 +59,12 @@ jobs:
           
           # Add host to known_hosts
           echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
-          ssh-keyscan -H -T 30 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
+          ssh-keyscan -H -T 10 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
           
+          chmod 644 ~/.ssh/known_hosts
           echo "SSH key setup successful"
         env:
           ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
-
-      - name: Setup SSH key permissions
-        run: |
-          chmod 600 ~/.ssh/oracle_key
-          chmod 644 ~/.ssh/known_hosts
 
       - name: Test SSH connection
         run: |
@@ -86,121 +76,101 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: deploy-staging
 
-      - name: Deploy prod_executable files via SCP
+      - name: Deploy all files via SCP (single transfer)
         run: |
-          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -r deploy-staging/prod_executable/* "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/prod_executable/"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -r deploy-staging/prod_executable "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts deploy-staging/start-all.bat deploy-staging/start-all.ps1 deploy-staging/start-all-with-tailscale.bat deploy-staging/start-all-with-tailscale.ps1 deploy-staging/README.md "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
           ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x ${{ env.DEPLOY_PATH }}/prod_executable/cline-remote-launch.sh"
-
-      - name: Deploy start scripts via SCP
-        run: |
-          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts deploy-staging/start-all.bat deploy-staging/start-all.ps1 deploy-staging/start-all-with-tailscale.bat deploy-staging/start-all-with-tailscale.ps1 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
-
-      - name: Deploy README
-        run: |
-          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts deploy-staging/README.md "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
 
       - name: Restart services after deployment
         if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
-          cat > /tmp/restart-services.sh << 'EOF'
-          #!/bin/bash
-          set -euo pipefail
-          
-          echo "=== Restarting services after deployment ==="
-          sudo systemctl daemon-reload
-          
-          # Check if services exist
-          if systemctl list-unit-files | grep -q "kanban-proxy.service"; then
-            echo "Services exist, restarting..."
-            sudo systemctl restart kanban-proxy kanban-server
-          else
-            echo "Services don't exist, enabling and starting..."
-            sudo systemctl enable kanban-proxy kanban-server
-            sudo systemctl start kanban-proxy kanban-server
-          fi
-          
-          echo "=== Verifying services restarted (with retries) ==="
-          maxRetries=30
-          retryDelay=15
-          
-          for i in $(seq 1 $maxRetries); do
-            echo "Attempt $i of $maxRetries: Checking service status..."
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" '
+            set -euo pipefail
+            echo "=== Restarting services after deployment ==="
+            sudo systemctl daemon-reload
             
-            proxyActive=false
-            serverActive=false
-            proxyHttpReady=false
-            serverHttpReady=false
-            
-            if systemctl is-active --quiet kanban-proxy; then
-              proxyActive=true
+            # Check if services exist
+            if systemctl list-unit-files | grep -q "kanban-proxy.service"; then
+              echo "Services exist, restarting..."
+              sudo systemctl restart kanban-proxy kanban-server
+            else
+              echo "Services don't exist, enabling and starting..."
+              sudo systemctl enable kanban-proxy kanban-server
+              sudo systemctl start kanban-proxy kanban-server
             fi
             
-            if systemctl is-active --quiet kanban-server; then
-              serverActive=true
-            fi
+            echo "=== Verifying services restarted ==="
+            maxRetries=10
+            retryDelay=5
             
-            # Also verify HTTP connectivity
-            if [ "$proxyActive" = true ]; then
-              if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 5 2>/dev/null | grep -q "200"; then
-                proxyHttpReady=true
+            for i in $(seq 1 $maxRetries); do
+              echo "Attempt $i of $maxRetries: Checking service status..."
+              
+              proxyActive=false
+              serverActive=false
+              proxyHttpReady=false
+              serverHttpReady=false
+              
+              if systemctl is-active --quiet kanban-proxy; then
+                proxyActive=true
               fi
-            fi
-            
-            if [ "$serverActive" = true ]; then
-              if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 5 2>/dev/null | grep -q "200"; then
-                serverHttpReady=true
+              
+              if systemctl is-active --quiet kanban-server; then
+                serverActive=true
               fi
+              
+              # Also verify HTTP connectivity
+              if [ "$proxyActive" = true ]; then
+                if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 3 2>/dev/null | grep -q "200"; then
+                  proxyHttpReady=true
+                fi
+              fi
+              
+              if [ "$serverActive" = true ]; then
+                if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 3 2>/dev/null | grep -q "200"; then
+                  serverHttpReady=true
+                fi
+              fi
+              
+              if [ "$proxyActive" = true ] && [ "$serverActive" = true ] && [ "$proxyHttpReady" = true ] && [ "$serverHttpReady" = true ]; then
+                echo "=== Both services are active and HTTP-ready ==="
+                break
+              fi
+              
+              if [ $i -lt $maxRetries ]; then
+                echo "Services not ready yet. Waiting $retryDelay seconds before retry..."
+                sleep $retryDelay
+              fi
+            done
+            
+            # Final verification
+            if ! systemctl is-active --quiet kanban-proxy; then
+              echo "ERROR: kanban-proxy not active after $maxRetries attempts" >&2
+              sudo systemctl status kanban-proxy --no-pager -l
+              journalctl -u kanban-proxy --no-pager -l -n 50
+              exit 1
             fi
             
-            if [ "$proxyActive" = true ] && [ "$serverActive" = true ] && [ "$proxyHttpReady" = true ] && [ "$serverHttpReady" = true ]; then
-              echo "=== Both services are active and HTTP-ready ==="
-              break
+            if ! systemctl is-active --quiet kanban-server; then
+              echo "ERROR: kanban-server not active after $maxRetries attempts" >&2
+              sudo systemctl status kanban-server --no-pager -l
+              journalctl -u kanban-server --no-pager -l -n 50
+              exit 1
             fi
             
-            # Show service status on each attempt for debugging
-            echo "--- kanban-proxy status ---"
-            systemctl status kanban-proxy --no-pager -l 2>&1 | head -20 || true
-            echo "--- kanban-server status ---"
-            systemctl status kanban-server --no-pager -l 2>&1 | head -20 || true
-            
-            if [ $i -lt $maxRetries ]; then
-              echo "Services not ready yet. Waiting $retryDelay seconds before retry..."
-              sleep $retryDelay
+            # Final HTTP verification
+            if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 3 2>/dev/null | grep -q "200"; then
+              echo "ERROR: kanban-proxy not responding to HTTP on port 3484" >&2
+              exit 1
             fi
-          done
-          
-          # Final verification
-          if ! systemctl is-active --quiet kanban-proxy; then
-            echo "ERROR: kanban-proxy not active after $maxRetries attempts" >&2
-            sudo systemctl status kanban-proxy --no-pager -l
-            journalctl -u kanban-proxy --no-pager -l -n 100
-            exit 1
-          fi
-          
-          if ! systemctl is-active --quiet kanban-server; then
-            echo "ERROR: kanban-server not active after $maxRetries attempts" >&2
-            sudo systemctl status kanban-server --no-pager -l
-            journalctl -u kanban-server --no-pager -l -n 100
-            exit 1
-          fi
-          
-          # Final HTTP verification
-          if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 5 2>/dev/null | grep -q "200"; then
-            echo "ERROR: kanban-proxy not responding to HTTP on port 3484" >&2
-            exit 1
-          fi
-          
-          if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 5 2>/dev/null | grep -q "200"; then
-            echo "ERROR: kanban-server not responding to HTTP on port 3485" >&2
-            exit 1
-          fi
-          
-          echo "=== Services restarted successfully and HTTP-ready ==="
-          systemctl status kanban-proxy --no-pager -l
-          systemctl status kanban-server --no-pager -l
-          EOF
-          
-          chmod +x /tmp/restart-services.sh
-          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts /tmp/restart-services.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/restart-services.sh"
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x /tmp/restart-services.sh && /tmp/restart-services.sh"
-          rm /tmp/restart-services.sh
+            
+            if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 3 2>/dev/null | grep -q "200"; then
+              echo "ERROR: kanban-server not responding to HTTP on port 3485" >&2
+              exit 1
+            fi
+            
+            echo "=== Services restarted successfully and HTTP-ready ==="
+            systemctl status kanban-proxy --no-pager -l
+            systemctl status kanban-server --no-pager -l
+          '
