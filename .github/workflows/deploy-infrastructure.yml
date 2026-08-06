@@ -89,10 +89,36 @@ jobs:
           ORACLE_USER="${ORACLE_USER}"
           DEPLOY_PATH="${DEPLOY_PATH}"
           
-          echo "=== [1/4] Installing system packages (minimal, no repo refresh) ==="
-          # Install required packages WITHOUT --refresh to avoid slow Oracle Linux repo metadata updates
-          # Use --setopt=install_weak_deps=False to skip weak dependencies
-          sudo dnf install -y --nodocs --setopt=install_weak_deps=False git curl wget firewalld 2>&1
+          echo "=== [1/4] Verifying system packages (using pre-installed binaries, no dnf) ==="
+          # Oracle Linux typically has git, curl, wget, firewalld pre-installed
+          # Verify they exist instead of installing via dnf (avoids slow repo metadata updates)
+          for cmd in git curl wget firewall-cmd; do
+            if ! command -v "$cmd" &> /dev/null; then
+              echo "WARNING: $cmd not found, attempting alternative installation..."
+              case "$cmd" in
+                git)
+                  # Git: try to install from source or use pre-compiled binary
+                  echo "Git not found - attempting to install from source..."
+                  cd /tmp && curl -fsSL "https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.45.0.tar.gz" -o git.tar.gz 2>/dev/null && tar -xzf git.tar.gz && cd git-* && make configure && ./configure --prefix=/usr/local && make -j$(nproc) && sudo make install 2>&1 | tail -5 || echo "ERROR: git installation from source failed"
+                  ;;
+                curl)
+                  # Download static curl binary
+                  cd /tmp && curl -fsSL "https://curl.se/download/curl-8.7.1.tar.gz" -o curl.tar.gz 2>/dev/null && tar -xzf curl.tar.gz && cd curl-* && ./configure --prefix=/usr/local && make -j$(nproc) && sudo make install 2>&1 | tail -5 || echo "ERROR: curl installation from source failed"
+                  ;;
+                wget)
+                  # Download static wget binary
+                  cd /tmp && curl -fsSL "https://ftp.gnu.org/gnu/wget/wget-1.21.4.tar.gz" -o wget.tar.gz 2>/dev/null && tar -xzf wget.tar.gz && cd wget-* && ./configure --prefix=/usr/local && make -j$(nproc) && sudo make install 2>&1 | tail -5 || echo "ERROR: wget installation from source failed"
+                  ;;
+                firewall-cmd)
+                  # firewalld is typically pre-installed on Oracle Linux, try starting service
+                  echo "firewall-cmd not found - attempting to start firewalld service..."
+                  sudo systemctl enable --now firewalld 2>/dev/null || echo "Warning: Could not start firewalld service"
+                  ;;
+              esac
+            else
+              echo "$cmd is available"
+            fi
+          done
           
           echo "=== [2/4] Configuring swap (4GB) ==="
           if [ ! -f /swapfile ]; then
@@ -114,10 +140,12 @@ jobs:
           fi
           
           echo "=== [3/4] Installing Node.js 22 via binary download (fastest, no repo updates) ==="
-          # Remove any existing nodejs to avoid conflicts
-          sudo dnf remove -y nodejs npm 2>/dev/null || true
-          sudo dnf module reset -y nodejs 2>/dev/null || true
-          sudo dnf module disable -y nodejs 2>/dev/null || true
+          # Remove any existing nodejs to avoid conflicts (using direct binary removal, no dnf)
+          sudo rm -f /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
+          sudo rm -rf /usr/local/lib/nodejs 2>/dev/null || true
+          sudo rm -rf /usr/lib/node_modules 2>/dev/null || true
+          # Also remove any dnf-installed nodejs if present (but don't use dnf to do it)
+          sudo rpm -e --nodeps nodejs npm 2>/dev/null || true
           
           # Download and install Node.js 22 binary directly (bypasses NodeSource repo entirely)
           NODE_VERSION="22.14.0"
@@ -176,8 +204,10 @@ jobs:
           echo "=== Configuring firewalld (single pass, no retries) ==="
           # Check if firewalld is installed
           if ! command -v firewall-cmd &> /dev/null; then
-            echo "firewall-cmd not found, installing firewalld..."
-            sudo dnf install -y firewalld
+            echo "firewall-cmd not found, attempting to start firewalld service directly..."
+            # firewalld is typically pre-installed on Oracle Linux, just start it
+            sudo systemctl enable --now firewalld 2>/dev/null || echo "Warning: Could not start firewalld service"
+            sleep 2
           fi
           
           # Start and enable firewalld if not running
