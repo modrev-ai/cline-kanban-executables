@@ -81,7 +81,15 @@ jobs:
           echo "=== Installing system packages (skipping full update for speed) ==="
           # Skip full dnf update to avoid timeout - only install required packages
           # Use --refresh to update metadata upfront, --nobest to avoid dependency issues
-          sudo dnf install -y --refresh --nobest git curl wget firewalld
+          # Add retry logic for dnf lock contention
+          for i in {1..5}; do
+            if sudo dnf install -y --refresh --nobest git curl wget firewalld; then
+              break
+            else
+              echo "dnf install failed (attempt $i/5), waiting 10s for lock to clear..."
+              sleep 10
+            fi
+          done
           
           echo "=== Configuring swap (4GB) ==="
           if [ ! -f /swapfile ]; then
@@ -105,7 +113,15 @@ jobs:
           # Always upgrade to Node.js 22 regardless of current version
           # The kanban package requires Node.js >= 22
           curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
-          sudo dnf install -y --refresh --nobest nodejs
+          # Add retry logic for dnf lock contention
+          for i in {1..5}; do
+            if sudo dnf install -y --refresh --nobest nodejs; then
+              break
+            else
+              echo "dnf install nodejs failed (attempt $i/5), waiting 10s for lock to clear..."
+              sleep 10
+            fi
+          done
           
           echo "=== Verifying Node.js installation ==="
           node --version
