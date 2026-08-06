@@ -166,13 +166,19 @@ jobs:
           fi
           
           echo "=== Verifying Node.js installation ==="
-          node --version
-          npm --version
+          # Clear command hash table to ensure we're using the newly installed node
+          hash -r 2>/dev/null || true
+          # Use full path to avoid any PATH caching issues
+          /usr/bin/node --version
+          /usr/bin/npm --version
           
           # Verify Node.js version is >= 22
-          NODE_MAJOR=$(node --version | sed 's/v\([0-9]*\).*/\1/')
+          NODE_MAJOR=$(/usr/bin/node --version | sed 's/v\([0-9]*\).*/\1/')
           if [ "$NODE_MAJOR" -lt 22 ]; then
             echo "ERROR: Node.js version is $NODE_MAJOR, but version 22 or higher is required"
+            echo "Checking alternative node locations:"
+            which -a node 2>/dev/null || true
+            ls -la /usr/bin/node* 2>/dev/null || true
             exit 1
           fi
           echo "Node.js version $NODE_MAJOR meets requirement (>= 22)"
