@@ -28,6 +28,18 @@ on:
       GH_PAT:
         description: 'GitHub Personal Access Token for private repo access'
         required: false
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: string
+        required: true
+        default: 'production'
+      deploy-infrastructure:
+        description: 'Deploy infrastructure (Node.js, services, firewall) before app deployment'
+        type: boolean
+        default: true
+        required: false
 
 jobs:
   deploy-infrastructure:
