@@ -46,6 +46,12 @@ jobs:
       ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
       DEPLOY_INFRASTRUCTURE: ${{ inputs.deploy-infrastructure }}
     steps:
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
