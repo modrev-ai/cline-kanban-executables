@@ -227,29 +227,20 @@ jobs:
             # Use the tarball URL from GitHub releases
             sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1 | tail -10
             
-            # Find and create proper symlink for cline binary using command -v (most reliable)
-            CLINE_ACTUAL_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'command -v cline' 2>/dev/null || echo "")
-            if [ -n "$CLINE_ACTUAL_PATH" ] && [ -f "$CLINE_ACTUAL_PATH" ]; then
-              echo "Found cline binary at: $CLINE_ACTUAL_PATH"
-              sudo ln -sf "$CLINE_ACTUAL_PATH" /usr/bin/cline
+            # Find and create proper symlink for cline binary - use npm global bin directly since PATH may not include it
+            if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
+              echo "Found cline binary at: /home/${ORACLE_USER}/.npm-global/bin/cline"
+              sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
             else
-              # Fallback: check npm global bin
-              if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
-                sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
-              else
-                echo "WARNING: Could not find cline binary via command -v"
-                sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/bin/' || true
-                sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/cline -type f -name "*.js" 2>/dev/null | head -20' || true
-              fi
+              echo "WARNING: Could not find cline binary at npm global bin"
+              sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/bin/' || true
+              sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/cline -type f -name "*.js" 2>/dev/null | head -20' || true
             fi
           else
             echo "cline is already at the latest version ($CLINE_LATEST_VERSION), skipping installation"
             # Ensure symlink exists even if skipping installation
             if [ ! -f "/usr/bin/cline" ]; then
-              CLINE_ACTUAL_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'command -v cline' 2>/dev/null || echo "")
-              if [ -n "$CLINE_ACTUAL_PATH" ] && [ -f "$CLINE_ACTUAL_PATH" ]; then
-                sudo ln -sf "$CLINE_ACTUAL_PATH" /usr/bin/cline
-              elif [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
+              if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
                 sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
               fi
             fi
@@ -257,25 +248,20 @@ jobs:
           
           echo "=== Verifying cline kanban command (built into cline) ==="
           # kanban is a built-in command of cline, not a separate package
-          # Verify it's available
-          if sudo -u "${ORACLE_USER}" bash -c 'cline kanban --help' &>/dev/null; then
+          # Verify it's available using the full path
+          if /usr/bin/cline kanban --help &>/dev/null; then
             echo "cline kanban command is available"
           else
             echo "WARNING: cline kanban command not found - may need to rebuild cline"
           fi
           
           echo "=== Creating cline symlink ==="
-          # Find actual cline binary location using which/command -v
-          CLINE_ACTUAL_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'command -v cline' 2>/dev/null || echo "")
-          if [ -n "$CLINE_ACTUAL_PATH" ] && [ -f "$CLINE_ACTUAL_PATH" ]; then
-            echo "Found cline at: $CLINE_ACTUAL_PATH"
-            sudo ln -sf "$CLINE_ACTUAL_PATH" /usr/bin/cline
+          # Find actual cline binary location - use npm global bin directly
+          if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
+            echo "Found cline at: /home/${ORACLE_USER}/.npm-global/bin/cline"
+            sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
           else
-            echo "WARNING: Could not find cline binary via command -v"
-            # Fallback to npm global bin
-            if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
-              sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
-            fi
+            echo "WARNING: Could not find cline binary at npm global bin"
           fi
           
           echo "=== Verifying installation ==="
