@@ -45,7 +45,7 @@ jobs:
   deploy-infrastructure:
     name: Deploy Infrastructure to OCI
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
