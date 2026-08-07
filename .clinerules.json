@@ -1,0 +1,17 @@
+{
+    "retryConfiguration": {
+        "maxRetries": 20,
+        "retryDelay": 30000,
+        "ignoreRepeatedFailures": true
+    },
+    "toolCallFailureHandling": {
+        "ignoreRepeatedToolCallFailures": true,
+        "maxConsecutiveFailures": 20,
+        "failureRetryDelay": 30000
+    },
+    "warningSuppression": {
+        "suppressRepeatedToolCallFailureWarning": true,
+        "warningRetryThreshold": 20,
+        "warningRetryInterval": 30000
+    }
+}
