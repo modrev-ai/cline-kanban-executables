@@ -1,0 +1,288 @@
+
+name: Setup Self-Hosted Runners on Oracle Compute
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        type: choice
+        options:
+          - production
+        default: 'production'
+      runner-labels:
+        description: 'Labels for the self-hosted runners (comma-separated)'
+        type: string
+        default: 'self-hosted,oracle,linux,kanban,cline'
+        required: false
+      runner-count:
+        description: 'Number of runners to create'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+        default: '1'
+        required: false
+      runner-group:
+        description: 'Runner group name'
+        type: string
+        default: 'default'
+        required: false
+
+jobs:
+  setup-runners:
+    name: Setup Self-Hosted Runners on OCI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+      RUNNER_LABELS: ${{ github.event.inputs.runner-labels }}
+      RUNNER_COUNT: ${{ github.event.inputs.runner-count }}
+      RUNNER_GROUP: ${{ github.event.inputs.runner-group }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          
+          # Decode base64 SSH key - remove any whitespace/newlines from secret
+          key="${ORACLE_SSH_KEY}"
+          key=$(echo "$key" | tr -d '[:space:]')
+          
+          echo "$key" | base64 -d > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          
+          # Add host to known_hosts
+          echo "Running ssh-keyscan for ${{ env.ORACLE_HOST }}..."
+          ssh-keyscan -H -T 10 "${{ env.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan timed out or failed, will use StrictHostKeyChecking=no"
+          
+          chmod 644 ~/.ssh/known_hosts
+          echo "SSH key setup successful"
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
+
+      - name: Test SSH connection
+        run: |
+          ssh -i ~/.ssh/oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "echo 'SSH connection successful'"
+      - name: Create runner setup script
+        run: |
+          cat > /tmp/setup-runners.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          
+          ORACLE_USER="${ORACLE_USER}"
+          DEPLOY_PATH="${DEPLOY_PATH}"
+          RUNNER_LABELS="${RUNNER_LABELS}"
+          RUNNER_COUNT="${RUNNER_COUNT}"
+          RUNNER_GROUP="${RUNNER_GROUP}"
+          GH_PAT="${GH_PAT}"
+          
+          echo "=== Setting up GitHub Self-Hosted Runners ==="
+          echo "Runner labels: ${RUNNER_LABELS}"
+          echo "Runner count: ${RUNNER_COUNT}"
+          echo "Runner group: ${RUNNER_GROUP}"
+          echo "Deploy path: ${DEPLOY_PATH}"
+          
+          # Create runner directory
+          RUNNER_DIR="${DEPLOY_PATH}/github-runners"
+          sudo -u "${ORACLE_USER}" mkdir -p "${RUNNER_DIR}"
+          
+          # Download GitHub Actions runner
+          RUNNER_VERSION="2.319.1"
+          ARCH="x64"
+          RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${ARCH}-${RUNNER_VERSION}.tar.gz"
+          
+          echo "Downloading GitHub Actions runner v${RUNNER_VERSION}..."
+          cd /tmp
+          curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 120 --connect-timeout 30 --max-time 180 \
+            "${RUNNER_URL}" -o actions-runner.tar.gz
+          
+          # Verify download
+          if [ ! -f actions-runner.tar.gz ] || [ ! -s actions-runner.tar.gz ]; then
+            echo "ERROR: Runner download failed or file is empty"
+            exit 1
+          fi
+          
+          # Extract to runner directory
+          echo "Extracting runner..."
+          sudo -u "${ORACLE_USER}" tar -xzf actions-runner.tar.gz -C "${RUNNER_DIR}"
+          
+          # Install dependencies (must run as root)
+          echo "Installing runner dependencies..."
+          sudo -n "${RUNNER_DIR}/bin/installdependencies.sh" 2>/dev/null || \
+          sudo "${RUNNER_DIR}/bin/installdependencies.sh"
+          
+          # Get registration token from GitHub
+          echo "Getting registration token from GitHub..."
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          
+          # First, test if the token has the right permissions
+          echo "Testing GH_PAT permissions..."
+          PERM_CHECK=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: token ${GH_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}")
+          
+          HTTP_CODE=$(echo "$PERM_CHECK" | tail -n1)
+          RESPONSE_BODY=$(echo "$PERM_CHECK" | head -n -1)
+          
+          if [ "$HTTP_CODE" = "401" ]; then
+            echo "ERROR: GH_PAT is invalid or expired (HTTP 401)"
+            echo "Please check the GH_PAT secret in GitHub repository settings"
+            exit 1
+          elif [ "$HTTP_CODE" = "403" ]; then
+            echo "ERROR: GH_PAT lacks required permissions (HTTP 403)"
+            echo "The token needs 'repo' scope (for private repos) and 'actions:write' or 'admin:repo_hook' permission"
+            echo "Response: $RESPONSE_BODY"
+            exit 1
+          elif [ "$HTTP_CODE" = "404" ]; then
+            echo "ERROR: Repository not found (HTTP 404)"
+            echo "Check GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}"
+            exit 1
+          elif [ "$HTTP_CODE" != "200" ]; then
+            echo "WARNING: Unexpected HTTP code: $HTTP_CODE"
+            echo "Response: $RESPONSE_BODY"
+          else
+            echo "GH_PAT has repository access (HTTP 200)"
+          fi
+          
+          # Now get the registration token
+          REG_TOKEN_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: token ${GH_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runners/registration-token")
+          
+          REG_HTTP_CODE=$(echo "$REG_TOKEN_RESPONSE" | tail -n1)
+          REG_RESPONSE_BODY=$(echo "$REG_TOKEN_RESPONSE" | head -n -1)
+          
+          echo "Registration token API response code: $REG_HTTP_CODE"
+          
+          if [ "$REG_HTTP_CODE" = "403" ]; then
+            echo "ERROR: GH_PAT lacks 'actions:write' or 'admin:repo_hook' permission to create runner registration tokens"
+            echo "Response: $REG_RESPONSE_BODY"
+            echo ""
+            echo "To fix this, update the GH_PAT secret in GitHub Settings > Secrets > Actions with a token that has:"
+            echo "  - For private repos: 'repo' scope (full control of private repositories)"
+            echo "  - For public repos: 'public_repo' scope"
+            echo "  - And either 'actions:write' or 'admin:repo_hook' permission"
+            exit 1
+          elif [ "$REG_HTTP_CODE" = "401" ]; then
+            echo "ERROR: GH_PAT is invalid or expired"
+            exit 1
+          elif [ "$REG_HTTP_CODE" != "201" ]; then
+            echo "ERROR: Failed to get registration token (HTTP $REG_HTTP_CODE)"
+            echo "Response: $REG_RESPONSE_BODY"
+            exit 1
+          fi
+          
+          REG_TOKEN=$(echo "$REG_RESPONSE_BODY" | jq -r '.token')
+          
+          if [ -z "${REG_TOKEN}" ] || [ "${REG_TOKEN}" = "null" ]; then
+            echo "ERROR: Failed to parse registration token from response"
+            echo "Response: $REG_RESPONSE_BODY"
+            exit 1
+          fi
+          
+          echo "Registration token obtained successfully"
+          
+          # Configure and install runners as services
+          for i in $(seq 1 ${RUNNER_COUNT}); do
+            RUNNER_NAME="oracle-runner-${i}-$(hostname)-$(date +%s)"
+            RUNNER_INSTANCE_DIR="${RUNNER_DIR}/runner-${i}"
+            
+            echo "=== Setting up runner ${i}/${RUNNER_COUNT}: ${RUNNER_NAME} ==="
+            
+            # Create instance directory
+            sudo -u "${ORACLE_USER}" mkdir -p "${RUNNER_INSTANCE_DIR}"
+            
+            # Copy runner files to instance directory
+            sudo -u "${ORACLE_USER}" cp -r "${RUNNER_DIR}"/* "${RUNNER_INSTANCE_DIR}/"
+            
+            # Configure runner
+            echo "Configuring runner ${RUNNER_NAME}..."
+            sudo -u "${ORACLE_USER}" bash -c "
+              cd ${RUNNER_INSTANCE_DIR} && \
+              ./config.sh \
+                --url https://github.com/${GITHUB_REPOSITORY} \
+                --token ${REG_TOKEN} \
+                --name ${RUNNER_NAME} \
+                --labels ${RUNNER_LABELS} \
+                --runnergroup ${RUNNER_GROUP} \
+                --work _work \
+                --unattended \
+                --replace
+            "
+            
+            # Install as service
+            echo "Installing runner ${RUNNER_NAME} as service..."
+            sudo "${RUNNER_INSTANCE_DIR}/svc.sh" install "${ORACLE_USER}"
+            
+            # Start service
+            echo "Starting runner ${RUNNER_NAME} service..."
+            sudo "${RUNNER_INSTANCE_DIR}/svc.sh" start
+            
+            echo "Runner ${RUNNER_NAME} setup complete!"
+          done
+          
+          # Verify runners are running
+          echo "=== Verifying runner services ==="
+          for i in $(seq 1 ${RUNNER_COUNT}); do
+            RUNNER_INSTANCE_DIR="${RUNNER_DIR}/runner-${i}"
+            echo "Checking runner ${i} status..."
+            sudo "${RUNNER_INSTANCE_DIR}/svc.sh" status
+          done
+          
+          echo "=== All runners setup complete ==="
+          EOF
+          
+          chmod +x /tmp/setup-runners.sh
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 /tmp/setup-runners.sh "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:/tmp/setup-runners.sh"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export ORACLE_USER='${{ env.ORACLE_USER }}' && export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' && export RUNNER_LABELS='${{ env.RUNNER_LABELS }}' && export RUNNER_COUNT='${{ env.RUNNER_COUNT }}' && export RUNNER_GROUP='${{ env.RUNNER_GROUP }}' && export GH_PAT='${{ env.GH_PAT }}' && export GITHUB_REPOSITORY='${{ github.repository }}' && chmod +x /tmp/setup-runners.sh && /tmp/setup-runners.sh"
+          rm /tmp/setup-runners.sh
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Verify runners are registered
+        run: |
+          echo "=== Verifying runners are registered with GitHub ==="
+          sleep 10
+          
+          # Get list of runners from GitHub API
+          RUNNERS=$(curl -s -H "Authorization: token ${GH_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runners" \
+            | jq -r '.runners[] | select(.name | startswith("oracle-runner")) | "\(.name) \(.status) \(.labels | map(.name) | join(","))"')
+          
+          if [ -z "$RUNNERS" ]; then
+            echo "WARNING: No oracle runners found in GitHub yet"
+          else
+            echo "Found runners:"
+            echo "$RUNNERS"
+          fi
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Runner setup summary
+        run: |
+          echo "## Self-Hosted Runner Setup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ github.event.inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Oracle Host | ${{ env.ORACLE_HOST }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner Count | ${{ github.event.inputs.runner-count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner Labels | ${{ github.event.inputs.runner-labels }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner Group | ${{ github.event.inputs.runner-group }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy Path | ${{ env.DEPLOY_PATH }}/github-runners |" >> $GITHUB_STEP_SUMMARY
+          echo "| Setup Time | $(date -u) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Use `runs-on: [self-hosted, oracle, linux]` in your workflows to target these runners" >> $GITHUB_STEP_SUMMARY
+          echo "2. Runners are installed as systemd services and will auto-start on boot" >> $GITHUB_STEP_SUMMARY
+          echo "3. Check runner status: `sudo systemctl status actions.runner.*`" >> $GITHUB_STEP_SUMMARY
+          echo "4. View runner logs: `journalctl -u actions.runner.* -f`" >> $GITHUB_STEP_SUMMARY
