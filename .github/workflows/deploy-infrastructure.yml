@@ -205,7 +205,8 @@ jobs:
           echo "=== Installing cline from modrev-ai/cline (latest release) ==="
           # Check if cline is already installed with the correct version
           # Use curl + grep/sed instead of python3 for better compatibility
-          CLINE_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/modrev-ai/cline/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' || echo "v4.1.3-modrev.1")
+          # Filter out placeholder versions (vX.Y.Z-modrev.N) and get the latest actual release
+          CLINE_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/modrev-ai/cline/releases" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' | grep -v '^vX\.Y\.Z-modrev\.N$' | head -1 || echo "v4.1.3-modrev.1")
           echo "Latest cline version from modrev-ai/cline: $CLINE_LATEST_VERSION"
           
           # Check currently installed cline version
@@ -228,13 +229,26 @@ jobs:
             sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1 | tail -10
             
             # Find and create proper symlink for cline binary - use npm global bin directly since PATH may not include it
+            # The binary might be in different locations depending on npm prefix
+            CLINE_BIN_PATH=""
             if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
-              echo "Found cline binary at: /home/${ORACLE_USER}/.npm-global/bin/cline"
-              sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
+              CLINE_BIN_PATH="/home/${ORACLE_USER}/.npm-global/bin/cline"
+            elif [ -f "/usr/local/bin/cline" ]; then
+              CLINE_BIN_PATH="/usr/local/bin/cline"
+            else
+              # Try to find it in npm global bin directory
+              CLINE_BIN_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'npm bin -g 2>/dev/null' 2>/dev/null)/cline 2>/dev/null || true
+            fi
+            
+            if [ -n "$CLINE_BIN_PATH" ] && [ -f "$CLINE_BIN_PATH" ]; then
+              echo "Found cline binary at: $CLINE_BIN_PATH"
+              sudo ln -sf "$CLINE_BIN_PATH" /usr/bin/cline
             else
               echo "WARNING: Could not find cline binary at npm global bin"
               sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/bin/' || true
               sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/cline -type f -name "*.js" 2>/dev/null | head -20' || true
+              # Also check /usr/local/bin
+              ls -la /usr/local/bin/ | grep cline || true
             fi
           else
             echo "cline is already at the latest version ($CLINE_LATEST_VERSION), skipping installation"
@@ -242,6 +256,8 @@ jobs:
             if [ ! -f "/usr/bin/cline" ]; then
               if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
                 sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
+              elif [ -f "/usr/local/bin/cline" ]; then
+                sudo ln -sf /usr/local/bin/cline /usr/bin/cline
               fi
             fi
           fi
