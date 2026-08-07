@@ -180,16 +180,77 @@ jobs:
           # Configure npm for ORACLE_USER
           sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm config set prefer-offline true && npm config set audit false && npm config set fund false && npm config set maxsockets 1'
           
-          # Install http-proxy
-          sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=1' 2>&1 | tail -10
+          echo "=== Installing http-proxy ==="
+          # Check if http-proxy is already installed
+          INSTALLED_HTTP_PROXY_VERSION=""
+          if sudo -u "${ORACLE_USER}" bash -c 'npm list -g http-proxy --depth=0' &>/dev/null; then
+            INSTALLED_HTTP_PROXY_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'npm list -g http-proxy --depth=0 2>/dev/null | grep http-proxy@ | sed "s/.*http-proxy@\([^ ]*\).*/\1/"' || echo "")
+            echo "Currently installed http-proxy version: $INSTALLED_HTTP_PROXY_VERSION"
+          else
+            echo "http-proxy not currently installed globally"
+          fi
           
-          echo "=== Installing cline from modrev-ai/cline ==="
-          CLINE_VERSION=$(python3 -c "import urllib.request, json; data = json.load(urllib.request.urlopen('https://api.github.com/repos/modrev-ai/cline/releases/latest')); print(data['tag_name'])")
-          echo "Latest cline version: $CLINE_VERSION"
-          sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1 | tail -10
+          # Get latest http-proxy version from npm
+          HTTP_PROXY_LATEST_VERSION=$(npm view http-proxy version 2>/dev/null || echo "1.18.1")
+          echo "Latest http-proxy version from npm: $HTTP_PROXY_LATEST_VERSION"
+          
+          # Only install/update if version differs
+          if [ "$INSTALLED_HTTP_PROXY_VERSION" != "$HTTP_PROXY_LATEST_VERSION" ]; then
+            echo "Installing/updating http-proxy to $HTTP_PROXY_LATEST_VERSION..."
+            sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=1' 2>&1 | tail -10
+          else
+            echo "http-proxy is already at the latest version ($HTTP_PROXY_LATEST_VERSION), skipping installation"
+          fi
+          
+          echo "=== Installing cline from modrev-ai/cline (latest release) ==="
+          # Check if cline is already installed with the correct version
+          CLINE_LATEST_VERSION=$(python3 -c "import urllib.request, json; data = json.load(urllib.request.urlopen('https://api.github.com/repos/modrev-ai/cline/releases/latest')); print(data['tag_name'])")
+          echo "Latest cline version from modrev-ai/cline: $CLINE_LATEST_VERSION"
+          
+          # Check currently installed cline version
+          INSTALLED_CLINE_VERSION=""
+          if sudo -u "${ORACLE_USER}" bash -c 'command -v cline' &>/dev/null; then
+            INSTALLED_CLINE_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'cline --version 2>/dev/null' | head -1 || echo "")
+            echo "Currently installed cline version: $INSTALLED_CLINE_VERSION"
+          else
+            echo "cline not currently installed"
+          fi
+          
+          # Only install/update if version differs
+          if [ "$INSTALLED_CLINE_VERSION" != "$CLINE_LATEST_VERSION" ]; then
+            echo "Installing/updating cline to $CLINE_LATEST_VERSION..."
+            sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1 | tail -10
+            
+            # Re-create symlink after installation
+            sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
+          else
+            echo "cline is already at the latest version ($CLINE_LATEST_VERSION), skipping installation"
+          fi
           
           echo "=== Installing kanban package globally (required for 'cline kanban') ==="
-          sudo -u "${ORACLE_USER}" bash -c 'npm install -g kanban --omit=optional --maxsockets=1' 2>&1 | tail -10
+          # Check if kanban is already installed
+          INSTALLED_KANBAN_VERSION=""
+          if sudo -u "${ORACLE_USER}" bash -c 'npm list -g kanban --depth=0' &>/dev/null; then
+            INSTALLED_KANBAN_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'npm list -g kanban --depth=0 2>/dev/null | grep kanban@ | sed "s/.*kanban@\([^ ]*\).*/\1/"' || echo "")
+            echo "Currently installed kanban version: $INSTALLED_KANBAN_VERSION"
+          else
+            echo "kanban not currently installed globally"
+          fi
+          
+          # Get latest kanban version from npm
+          KANBAN_LATEST_VERSION=$(npm view kanban version 2>/dev/null || echo "0.1.70")
+          echo "Latest kanban version from npm: $KANBAN_LATEST_VERSION"
+          
+          # Only install/update if version differs
+          if [ "$INSTALLED_KANBAN_VERSION" != "$KANBAN_LATEST_VERSION" ]; then
+            echo "Installing/updating kanban to $KANBAN_LATEST_VERSION..."
+            sudo -u "${ORACLE_USER}" bash -c 'npm install -g kanban --omit=optional --maxsockets=1' 2>&1 | tail -10
+            
+            # Re-create symlink after installation
+            sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
+          else
+            echo "kanban is already at the latest version ($KANBAN_LATEST_VERSION), skipping installation"
+          fi
           
           echo "=== Creating cline symlink ==="
           sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
