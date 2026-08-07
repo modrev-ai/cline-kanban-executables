@@ -227,18 +227,17 @@ jobs:
             # Use the tarball URL from GitHub releases
             sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1 | tail -10
             
-            # Find and create proper symlink for cline binary
-            # npm global installs put binaries in ~/.npm-global/bin/
-            CLINE_BIN_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/cline -name "cline" -type f 2>/dev/null | head -1' || echo "")
-            if [ -n "$CLINE_BIN_PATH" ] && [ -f "$CLINE_BIN_PATH" ]; then
-              echo "Found cline binary at: $CLINE_BIN_PATH"
-              sudo ln -sf "$CLINE_BIN_PATH" /usr/bin/cline
+            # Find and create proper symlink for cline binary using command -v (most reliable)
+            CLINE_ACTUAL_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'command -v cline' 2>/dev/null || echo "")
+            if [ -n "$CLINE_ACTUAL_PATH" ] && [ -f "$CLINE_ACTUAL_PATH" ]; then
+              echo "Found cline binary at: $CLINE_ACTUAL_PATH"
+              sudo ln -sf "$CLINE_ACTUAL_PATH" /usr/bin/cline
             else
-              # Fallback: check if npm created a symlink in ~/.npm-global/bin/
+              # Fallback: check npm global bin
               if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
                 sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
               else
-                echo "WARNING: Could not find cline binary, checking npm global bin..."
+                echo "WARNING: Could not find cline binary via command -v"
                 sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/bin/' || true
                 sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/cline -type f -name "*.js" 2>/dev/null | head -20' || true
               fi
@@ -247,43 +246,37 @@ jobs:
             echo "cline is already at the latest version ($CLINE_LATEST_VERSION), skipping installation"
             # Ensure symlink exists even if skipping installation
             if [ ! -f "/usr/bin/cline" ]; then
-              CLINE_BIN_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/cline -name "cline" -type f 2>/dev/null | head -1' || echo "")
-              if [ -n "$CLINE_BIN_PATH" ] && [ -f "$CLINE_BIN_PATH" ]; then
-                sudo ln -sf "$CLINE_BIN_PATH" /usr/bin/cline
+              CLINE_ACTUAL_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'command -v cline' 2>/dev/null || echo "")
+              if [ -n "$CLINE_ACTUAL_PATH" ] && [ -f "$CLINE_ACTUAL_PATH" ]; then
+                sudo ln -sf "$CLINE_ACTUAL_PATH" /usr/bin/cline
               elif [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
                 sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
               fi
             fi
           fi
           
-          echo "=== Installing kanban package globally (required for 'cline kanban') ==="
-          # Check if kanban is already installed
-          INSTALLED_KANBAN_VERSION=""
-          if sudo -u "${ORACLE_USER}" bash -c 'npm list -g kanban --depth=0' &>/dev/null; then
-            INSTALLED_KANBAN_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'npm list -g kanban --depth=0 2>/dev/null | grep kanban@ | sed "s/.*kanban@\([^ ]*\).*/\1/"' || echo "")
-            echo "Currently installed kanban version: $INSTALLED_KANBAN_VERSION"
+          echo "=== Verifying cline kanban command (built into cline) ==="
+          # kanban is a built-in command of cline, not a separate package
+          # Verify it's available
+          if sudo -u "${ORACLE_USER}" bash -c 'cline kanban --help' &>/dev/null; then
+            echo "cline kanban command is available"
           else
-            echo "kanban not currently installed globally"
-          fi
-          
-          # Get latest kanban version from npm
-          KANBAN_LATEST_VERSION=$(npm view kanban version 2>/dev/null || echo "0.1.70")
-          echo "Latest kanban version from npm: $KANBAN_LATEST_VERSION"
-          
-          # Only install/update if version differs
-          if [ "$INSTALLED_KANBAN_VERSION" != "$KANBAN_LATEST_VERSION" ]; then
-            echo "Installing/updating kanban to $KANBAN_LATEST_VERSION..."
-            sudo -u "${ORACLE_USER}" bash -c 'npm install -g kanban --omit=optional --maxsockets=1' 2>&1 | tail -10
-            
-            # Re-create symlink after installation
-            sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
-          else
-            echo "kanban is already at the latest version ($KANBAN_LATEST_VERSION), skipping installation"
+            echo "WARNING: cline kanban command not found - may need to rebuild cline"
           fi
           
           echo "=== Creating cline symlink ==="
-          sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
-          sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
+          # Find actual cline binary location using which/command -v
+          CLINE_ACTUAL_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'command -v cline' 2>/dev/null || echo "")
+          if [ -n "$CLINE_ACTUAL_PATH" ] && [ -f "$CLINE_ACTUAL_PATH" ]; then
+            echo "Found cline at: $CLINE_ACTUAL_PATH"
+            sudo ln -sf "$CLINE_ACTUAL_PATH" /usr/bin/cline
+          else
+            echo "WARNING: Could not find cline binary via command -v"
+            # Fallback to npm global bin
+            if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
+              sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
+            fi
+          fi
           
           echo "=== Verifying installation ==="
           node --version
