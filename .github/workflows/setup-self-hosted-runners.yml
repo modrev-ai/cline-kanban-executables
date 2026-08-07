@@ -111,9 +111,10 @@ jobs:
           echo "Extracting runner..."
           sudo -u "${ORACLE_USER}" tar -xzf actions-runner.tar.gz -C "${RUNNER_DIR}"
           
-          # Install dependencies
+          # Install dependencies (must run as root)
           echo "Installing runner dependencies..."
-          sudo -u "${ORACLE_USER}" bash -c "cd ${RUNNER_DIR} && ./bin/installdependencies.sh"
+          sudo -n "${RUNNER_DIR}/bin/installdependencies.sh" 2>/dev/null || \
+          sudo "${RUNNER_DIR}/bin/installdependencies.sh"
           
           # Get registration token from GitHub
           echo "Getting registration token from GitHub..."
