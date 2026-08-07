@@ -209,7 +209,7 @@ jobs:
           CLINE_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/modrev-ai/cline/releases" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' | grep -v '^vX\.Y\.Z-modrev\.N$' | head -1 || echo "v4.1.3-modrev.1")
           echo "Latest cline version from modrev-ai/cline: $CLINE_LATEST_VERSION"
           
-          # Check currently installed cline version
+          # Check currently installed cline version - use the actual binary to get version
           INSTALLED_CLINE_VERSION=""
           if sudo -u "${ORACLE_USER}" bash -c 'command -v cline' &>/dev/null; then
             INSTALLED_CLINE_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'cline --version 2>/dev/null' | head -1 || echo "")
@@ -222,9 +222,32 @@ jobs:
           NORMALIZED_LATEST="${CLINE_LATEST_VERSION#v}"
           NORMALIZED_INSTALLED="${INSTALLED_CLINE_VERSION#v}"
           
-          # Only install/update if version differs
+          # Force reinstall if version differs OR if we can't verify the installed version matches modrev-ai
+          # Also check if the installed cline is actually from modrev-ai by checking its package.json
+          FORCE_CLINE_INSTALL=false
           if [ "$NORMALIZED_INSTALLED" != "$NORMALIZED_LATEST" ]; then
-            echo "Installing/updating cline to $CLINE_LATEST_VERSION..."
+            echo "Version mismatch: installed=$NORMALIZED_INSTALLED, expected=$NORMALIZED_LATEST"
+            FORCE_CLINE_INSTALL=true
+          elif [ -z "$INSTALLED_CLINE_VERSION" ]; then
+            echo "No cline version detected"
+            FORCE_CLINE_INSTALL=true
+          else
+            # Verify the installed cline is from modrev-ai by checking package.json
+            CLINE_PKG_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null)/cline/package.json
+            if [ -f "$CLINE_PKG_PATH" ]; then
+              CLINE_REPO=$(grep -o '"repository"[^}]*' "$CLINE_PKG_PATH" 2>/dev/null | head -1 || echo "")
+              if [[ ! "$CLINE_REPO" =~ modrev-ai/cline ]]; then
+                echo "Installed cline is not from modrev-ai/cline (repository: $CLINE_REPO), forcing reinstall"
+                FORCE_CLINE_INSTALL=true
+              fi
+            else
+              echo "Could not verify cline package source, forcing reinstall to ensure modrev-ai version"
+              FORCE_CLINE_INSTALL=true
+            fi
+          fi
+          
+          if [ "$FORCE_CLINE_INSTALL" = true ]; then
+            echo "Installing/updating cline to $CLINE_LATEST_VERSION from modrev-ai/cline..."
             # Use the tarball URL from GitHub releases
             sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1 | tail -10
             
@@ -251,7 +274,7 @@ jobs:
               ls -la /usr/local/bin/ | grep cline || true
             fi
           else
-            echo "cline is already at the latest version ($CLINE_LATEST_VERSION), skipping installation"
+            echo "cline is already at the correct modrev-ai version ($CLINE_LATEST_VERSION), skipping installation"
             # Ensure symlink exists even if skipping installation
             if [ ! -f "/usr/bin/cline" ]; then
               if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
@@ -268,19 +291,36 @@ jobs:
           KANABAN_LATEST_SHA=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/commits/main" 2>/dev/null | grep '"sha"' | head -1 | sed 's/.*"sha": "\([^"]*\)".*/\1/' | cut -c1-7 || echo "main")
           echo "Latest kanban commit from modrev-ai/kanban: $KANABAN_LATEST_SHA"
           
-          # Check currently installed kanban version
+          # Check currently installed kanban version - use package.json to get actual version
           INSTALLED_KANABAN_VERSION=""
+          INSTALLED_KANABAN_REPO=""
           if sudo -u "${ORACLE_USER}" bash -c 'npm list -g kanban --depth=0' &>/dev/null; then
             INSTALLED_KANABAN_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'npm list -g kanban --depth=0 2>/dev/null | grep kanban@ | sed "s/.*kanban@\([^ ]*\).*/\1/"' || echo "")
             echo "Currently installed kanban version: $INSTALLED_KANABAN_VERSION"
+            # Check if it's from modrev-ai/kanban by looking at package.json
+            KANABAN_PKG_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null)/kanban/package.json
+            if [ -f "$KANABAN_PKG_PATH" ]; then
+              INSTALLED_KANABAN_REPO=$(grep -o '"repository"[^}]*' "$KANABAN_PKG_PATH" 2>/dev/null | head -1 || echo "")
+              echo "Installed kanban repository: $INSTALLED_KANABAN_REPO"
+            fi
           else
             echo "kanban not currently installed globally"
           fi
           
-          # Only install/update if version differs (compare commit SHA or version)
-          # We use the commit SHA as a version identifier since there are no releases
-          if [ "$INSTALLED_KANABAN_VERSION" != "$KANABAN_LATEST_SHA" ]; then
-            echo "Installing/updating kanban to $KANABAN_LATEST_SHA..."
+          # Force reinstall if not from modrev-ai/kanban or if we can't verify
+          FORCE_KANABAN_INSTALL=false
+          if [ -z "$INSTALLED_KANABAN_VERSION" ]; then
+            echo "No kanban version detected"
+            FORCE_KANABAN_INSTALL=true
+          elif [[ ! "$INSTALLED_KANABAN_REPO" =~ modrev-ai/kanban ]]; then
+            echo "Installed kanban is not from modrev-ai/kanban (repository: $INSTALLED_KANABAN_REPO), forcing reinstall"
+            FORCE_KANABAN_INSTALL=true
+          else
+            echo "kanban is already from modrev-ai/kanban, skipping installation"
+          fi
+          
+          if [ "$FORCE_KANABAN_INSTALL" = true ]; then
+            echo "Installing/updating kanban to latest from modrev-ai/kanban main branch..."
             # Use the tarball URL from GitHub main branch
             sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/kanban/tarball/main --omit=optional --maxsockets=1" 2>&1 | tail -10
             
@@ -294,7 +334,7 @@ jobs:
               sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/kanban -type f -name "*.js" 2>/dev/null | head -20' || true
             fi
           else
-            echo "kanban is already at the latest version ($KANABAN_LATEST_SHA), skipping installation"
+            echo "kanban is already from modrev-ai/kanban, skipping installation"
             # Ensure symlink exists even if skipping installation
             if [ ! -f "/usr/bin/kanban" ]; then
               if [ -f "/home/${ORACLE_USER}/.npm-global/bin/kanban" ]; then
@@ -450,10 +490,46 @@ jobs:
             echo "=== Quick infrastructure verification ==="
             node --version
             npm --version
-            cline --version || echo "cline check failed"
-            kanban --version || echo "kanban check failed"
+            
+            # Verify cline is from modrev-ai
+            echo "=== Verifying cline version and source ==="
+            CLINE_VERSION=$(cline --version 2>/dev/null | head -1 || echo "NOT FOUND")
+            echo "cline version: $CLINE_VERSION"
+            CLINE_PKG_PATH=$(npm root -g 2>/dev/null)/cline/package.json
+            if [ -f "$CLINE_PKG_PATH" ]; then
+              CLINE_REPO=$(grep -o '"repository"[^}]*' "$CLINE_PKG_PATH" 2>/dev/null | head -1 || echo "")
+              echo "cline repository: $CLINE_REPO"
+              if [[ ! "$CLINE_REPO" =~ modrev-ai/cline ]]; then
+                echo "ERROR: cline is not from modrev-ai/cline!" >&2
+                exit 1
+              fi
+            else
+              echo "ERROR: Could not find cline package.json" >&2
+              exit 1
+            fi
+            
+            # Verify kanban is from modrev-ai
+            echo "=== Verifying kanban version and source ==="
+            KANABAN_VERSION=$(npm list -g kanban --depth=0 2>/dev/null | grep kanban@ | sed "s/.*kanban@\([^ ]*\).*/\1/" || echo "NOT FOUND")
+            echo "kanban version: $KANABAN_VERSION"
+            KANABAN_PKG_PATH=$(npm root -g 2>/dev/null)/kanban/package.json
+            if [ -f "$KANABAN_PKG_PATH" ]; then
+              KANABAN_REPO=$(grep -o '"repository"[^}]*' "$KANABAN_PKG_PATH" 2>/dev/null | head -1 || echo "")
+              echo "kanban repository: $KANABAN_REPO"
+              if [[ ! "$KANABAN_REPO" =~ modrev-ai/kanban ]]; then
+                echo "ERROR: kanban is not from modrev-ai/kanban!" >&2
+                exit 1
+              fi
+            else
+              echo "ERROR: Could not find kanban package.json" >&2
+              exit 1
+            fi
+            
+            # Verify cline kanban command works
+            echo "=== Verifying cline kanban command ==="
+            /usr/bin/cline kanban --help 2>&1 | head -5 || (echo "ERROR: cline kanban command failed" >&2 && exit 1)
+            
             npm list -g http-proxy --depth=0 2>/dev/null || echo "http-proxy not in global list"
-            npm list -g kanban --depth=0 2>/dev/null || echo "kanban not in global list"
             systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found" && exit 1)
             sudo systemd-analyze verify /etc/systemd/system/kanban-proxy.service
             sudo systemd-analyze verify /etc/systemd/system/kanban-server.service
