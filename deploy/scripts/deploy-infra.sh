@@ -183,7 +183,7 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
   
   # Get the actual npm global bin for the oracle user
   echo "DEBUG: Getting npm global bin..."
-  NPM_GLOBAL_BIN=$(sudo -u "${ORACLE_USER}" bash -c 'npm bin -g 2>/dev/null' 2>/dev/null)
+  NPM_GLOBAL_BIN=$(timeout 10 sudo -u "${ORACLE_USER}" bash -c 'npm bin -g 2>/dev/null' 2>/dev/null || echo "")
   echo "DEBUG: npm bin -g returned: '$NPM_GLOBAL_BIN'"
   if [ -z "$NPM_GLOBAL_BIN" ]; then
     NPM_GLOBAL_BIN="/home/${ORACLE_USER}/.npm-global/bin"
@@ -193,7 +193,7 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
   
   # Also get npm global root to find the package
   echo "DEBUG: Getting npm global root..."
-  NPM_GLOBAL_ROOT=$(sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null)
+  NPM_GLOBAL_ROOT=$(timeout 10 sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null || echo "")
   echo "DEBUG: npm root -g returned: '$NPM_GLOBAL_ROOT'"
   echo "npm global root: $NPM_GLOBAL_ROOT"
   
