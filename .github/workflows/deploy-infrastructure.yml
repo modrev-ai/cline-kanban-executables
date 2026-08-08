@@ -259,6 +259,7 @@ jobs:
               exit $CLINE_INSTALL_EXIT_CODE
             fi
             echo "npm install completed successfully"
+            echo "DEBUG: Starting symlink creation..."
             
             # Find and create proper symlink for cline binary - use npm global bin directly since PATH may not include it
             # The binary might be in different locations depending on npm prefix
@@ -266,34 +267,47 @@ jobs:
             CLINE_BIN_PATH=""
             
             # Get the actual npm global bin for the oracle user
+            echo "DEBUG: Getting npm global bin..."
             NPM_GLOBAL_BIN=$(sudo -u "${ORACLE_USER}" bash -c 'npm bin -g 2>/dev/null' 2>/dev/null)
+            echo "DEBUG: npm bin -g returned: '$NPM_GLOBAL_BIN'"
             if [ -z "$NPM_GLOBAL_BIN" ]; then
               NPM_GLOBAL_BIN="/home/${ORACLE_USER}/.npm-global/bin"
+              echo "DEBUG: Using fallback npm global bin: $NPM_GLOBAL_BIN"
             fi
             echo "npm global bin: $NPM_GLOBAL_BIN"
             
             # Also get npm global root to find the package
+            echo "DEBUG: Getting npm global root..."
             NPM_GLOBAL_ROOT=$(sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null)
+            echo "DEBUG: npm root -g returned: '$NPM_GLOBAL_ROOT'"
             echo "npm global root: $NPM_GLOBAL_ROOT"
             
             # Check multiple possible locations for the cline binary
             # Priority: npm global bin -> npm global root/cline/bin -> ~/.npm-global/bin -> /usr/local/bin
+            echo "DEBUG: Checking for cline binary at ${NPM_GLOBAL_BIN}/cline"
             if [ -f "${NPM_GLOBAL_BIN}/cline" ]; then
               CLINE_BIN_PATH="${NPM_GLOBAL_BIN}/cline"
+              echo "DEBUG: Found at npm global bin"
             elif [ -n "$NPM_GLOBAL_ROOT" ] && [ -f "${NPM_GLOBAL_ROOT}/cline/bin/cline" ]; then
               CLINE_BIN_PATH="${NPM_GLOBAL_ROOT}/cline/bin/cline"
+              echo "DEBUG: Found at npm global root/cline/bin/cline"
             elif [ -n "$NPM_GLOBAL_ROOT" ] && [ -f "${NPM_GLOBAL_ROOT}/cline/cli.js" ]; then
               # Some packages have cli.js instead of bin/cline
               CLINE_BIN_PATH="${NPM_GLOBAL_ROOT}/cline/cli.js"
+              echo "DEBUG: Found at npm global root/cline/cli.js"
             elif [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
               CLINE_BIN_PATH="/home/${ORACLE_USER}/.npm-global/bin/cline"
+              echo "DEBUG: Found at ~/.npm-global/bin/cline"
             elif [ -f "/usr/local/bin/cline" ]; then
               CLINE_BIN_PATH="/usr/local/bin/cline"
+              echo "DEBUG: Found at /usr/local/bin/cline"
             fi
             
             if [ -n "$CLINE_BIN_PATH" ] && [ -f "$CLINE_BIN_PATH" ]; then
               echo "Found cline binary at: $CLINE_BIN_PATH"
+              echo "DEBUG: Creating symlink..."
               sudo ln -sf "$CLINE_BIN_PATH" /usr/bin/cline
+              echo "DEBUG: Symlink created"
             else
               echo "WARNING: Could not find cline binary at npm global bin"
               echo "Checking npm global bin directory:"
@@ -308,7 +322,9 @@ jobs:
             
             # Verify the symlink points to the correct (new) version
             echo "Verifying cline symlink points to correct version..."
+            echo "DEBUG: Running /usr/bin/cline --version"
             /usr/bin/cline --version
+            echo "DEBUG: cline --version completed"
           else
             echo "cline is already at the correct modrev-ai version ($CLINE_LATEST_VERSION), skipping installation"
             # Ensure symlink exists even if skipping installation
