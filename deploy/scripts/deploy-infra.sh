@@ -182,13 +182,15 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
   CLINE_BIN_PATH=""
   
   # Get the actual npm global bin for the oracle user
-  echo "DEBUG: Getting npm global bin..."
-  NPM_GLOBAL_BIN=$(timeout 10 sudo -u "${ORACLE_USER}" bash -c 'npm bin -g 2>/dev/null' 2>/dev/null || echo "")
-  echo "DEBUG: npm bin -g returned: '$NPM_GLOBAL_BIN'"
-  if [ -z "$NPM_GLOBAL_BIN" ]; then
-    NPM_GLOBAL_BIN="/home/${ORACLE_USER}/.npm-global/bin"
-    echo "DEBUG: Using fallback npm global bin: $NPM_GLOBAL_BIN"
+  # Use npm prefix -g to get the global prefix, then append /bin
+  echo "DEBUG: Getting npm global prefix..."
+  NPM_GLOBAL_PREFIX=$(timeout 10 sudo -u "${ORACLE_USER}" bash -c 'npm prefix -g 2>/dev/null' 2>/dev/null || echo "")
+  echo "DEBUG: npm prefix -g returned: '$NPM_GLOBAL_PREFIX'"
+  if [ -z "$NPM_GLOBAL_PREFIX" ]; then
+    NPM_GLOBAL_PREFIX="/home/${ORACLE_USER}/.npm-global"
+    echo "DEBUG: Using fallback npm global prefix: $NPM_GLOBAL_PREFIX"
   fi
+  NPM_GLOBAL_BIN="${NPM_GLOBAL_PREFIX}/bin"
   echo "npm global bin: $NPM_GLOBAL_BIN"
   
   # Also get npm global root to find the package
@@ -240,6 +242,11 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
   echo "DEBUG: Running /usr/bin/cline --version"
   /usr/bin/cline --version
   echo "DEBUG: cline --version completed"
+  
+  # Also verify cline kanban command works
+  echo "Verifying cline kanban command..."
+  /usr/bin/cline kanban --help 2>&1 | head -5
+  echo "DEBUG: cline kanban --help completed"
 else
   echo "cline is already at the correct modrev-ai version ($CLINE_LATEST_VERSION), skipping installation"
   # Ensure symlink exists even if skipping installation
