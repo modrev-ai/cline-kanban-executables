@@ -357,8 +357,11 @@ jobs:
           if [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
             echo "Found cline at: /home/${ORACLE_USER}/.npm-global/bin/cline"
             sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/cline /usr/bin/cline
+          elif [ -f "/usr/local/bin/cline" ]; then
+            echo "Found cline at: /usr/local/bin/cline"
+            sudo ln -sf /usr/local/bin/cline /usr/bin/cline
           else
-            echo "WARNING: Could not find cline binary at npm global bin"
+            echo "WARNING: Could not find cline binary at npm global bin or /usr/local/bin"
           fi
           
           echo "=== Creating kanban symlink ==="
@@ -498,55 +501,4 @@ jobs:
       - name: Verify infrastructure deployment (single quick check)
         if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -o ConnectTimeout=30 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" '
-            set -euo pipefail
-            echo "=== Quick infrastructure verification ==="
-            node --version
-            npm --version
-            
-            # Verify cline is from modrev-ai (use ORACLE_USER npm global root)
-            echo "=== Verifying cline version and source ==="
-            CLINE_VERSION=$(/usr/bin/cline --version 2>/dev/null | head -1 || echo "NOT FOUND")
-            echo "cline version: $CLINE_VERSION"
-            # Use ORACLE_USER npm global root since packages were installed as that user
-            CLINE_PKG_PATH="/home/${ORACLE_USER}/.npm-global/lib/node_modules/cline/package.json"
-            if [ -f "$CLINE_PKG_PATH" ]; then
-              CLINE_REPO=$(grep -o '"repository"[^}]*' "$CLINE_PKG_PATH" 2>/dev/null | head -1 || echo "")
-              echo "cline repository: $CLINE_REPO"
-              if [[ ! "$CLINE_REPO" =~ modrev-ai/cline ]]; then
-                echo "ERROR: cline is not from modrev-ai/cline!" >&2
-                exit 1
-              fi
-            else
-              echo "ERROR: Could not find cline package.json at $CLINE_PKG_PATH" >&2
-              exit 1
-            fi
-            
-            # Verify kanban is from modrev-ai (use ORACLE_USER npm global root)
-            echo "=== Verifying kanban version and source ==="
-            KANABAN_VERSION=$(sudo -u "${ORACLE_USER}" bash -c "npm list -g kanban --depth=0 2>/dev/null | grep kanban@ | sed 's/.*kanban@\([^ ]*\).*/\1/'" || echo "NOT FOUND")
-            echo "kanban version: $KANABAN_VERSION"
-            KANABAN_PKG_PATH="/home/${ORACLE_USER}/.npm-global/lib/node_modules/kanban/package.json"
-            if [ -f "$KANABAN_PKG_PATH" ]; then
-              KANABAN_REPO=$(grep -o '"repository"[^}]*' "$KANABAN_PKG_PATH" 2>/dev/null | head -1 || echo "")
-              echo "kanban repository: $KANABAN_REPO"
-              if [[ ! "$KANABAN_REPO" =~ modrev-ai/kanban ]]; then
-                echo "ERROR: kanban is not from modrev-ai/kanban!" >&2
-                exit 1
-              fi
-            else
-              echo "ERROR: Could not find kanban package.json at $KANABAN_PKG_PATH" >&2
-              exit 1
-            fi
-            
-            # Verify cline kanban command works
-            echo "=== Verifying cline kanban command ==="
-            /usr/bin/cline kanban --help 2>&1 | head -5 || (echo "ERROR: cline kanban command failed" >&2 && exit 1)
-            
-            sudo -u "${ORACLE_USER}" bash -c "npm list -g http-proxy --depth=0 2>/dev/null" || echo "http-proxy not in global list"
-            systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found" && exit 1)
-            sudo systemd-analyze verify /etc/systemd/system/kanban-proxy.service
-            sudo systemd-analyze verify /etc/systemd/system/kanban-server.service
-            sudo firewall-cmd --list-ports 2>/dev/null | grep -E "3484|3485" || echo "Firewall ports check (may need manual verification)"
-            echo "=== Infrastructure verification complete ==="
-          '
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -o ConnectTimeout=30 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export ORACLE_USER='${{ env.ORACLE_USER }}' && export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' && set -euo pipefail && echo '=== Quick infrastructure verification ===' && node --version && npm --version && echo '=== Verifying cline version and source ===' && CLINE_VERSION=\$(/usr/bin/cline --version 2>/dev/null | head -1 || echo 'NOT FOUND') && echo \"cline version: \$CLINE_VERSION\" && CLINE_PKG_PATH=\"/home/\${ORACLE_USER}/.npm-global/lib/node_modules/cline/package.json\" && if [ -f \"\$CLINE_PKG_PATH\" ]; then CLINE_REPO=\$(grep -o '\"repository\"[^}]*' \"\$CLINE_PKG_PATH\" 2>/dev/null | head -1 || echo '') && echo \"cline repository: \$CLINE_REPO\" && if [[ ! \"\$CLINE_REPO\" =~ modrev-ai/cline ]]; then echo 'ERROR: cline is not from modrev-ai/cline!' >&2 && exit 1; fi; else echo \"ERROR: Could not find cline package.json at \$CLINE_PKG_PATH\" >&2 && exit 1; fi && echo '=== Verifying kanban version and source ===' && KANABAN_VERSION=\$(sudo -u \"\${ORACLE_USER}\" bash -c \"npm list -g kanban --depth=0 2>/dev/null | grep kanban@ | sed 's/.*kanban@\\([^ ]*\\).*/\\1/'\" || echo 'NOT FOUND') && echo \"kanban version: \$KANABAN_VERSION\" && KANABAN_PKG_PATH=\"/home/\${ORACLE_USER}/.npm-global/lib/node_modules/kanban/package.json\" && if [ -f \"\$KANABAN_PKG_PATH\" ]; then KANABAN_REPO=\$(grep -o '\"repository\"[^}]*' \"\$KANABAN_PKG_PATH\" 2>/dev/null | head -1 || echo '') && echo \"kanban repository: \$KANABAN_REPO\" && if [[ ! \"\$KANABAN_REPO\" =~ modrev-ai/kanban ]]; then echo 'ERROR: kanban is not from modrev-ai/kanban!' >&2 && exit 1; fi; else echo \"ERROR: Could not find kanban package.json at \$KANABAN_PKG_PATH\" >&2 && exit 1; fi && echo '=== Verifying cline kanban command ===' && /usr/bin/cline kanban --help 2>&1 | head -5 || (echo 'ERROR: cline kanban command failed' >&2 && exit 1) && sudo -u \"\${ORACLE_USER}\" bash -c \"npm list -g http-proxy --depth=0 2>/dev/null\" || echo 'http-proxy not in global list' && systemctl list-unit-files | grep -E 'kanban-proxy|kanban-server' || (echo 'ERROR: Unit files not found' && exit 1) && sudo systemd-analyze verify /etc/systemd/system/kanban-proxy.service && sudo systemd-analyze verify /etc/systemd/system/kanban-server.service && sudo firewall-cmd --list-ports 2>/dev/null | grep -E '3484|3485' || echo 'Firewall ports check (may need manual verification)' && echo '=== Infrastructure verification complete ==='"
