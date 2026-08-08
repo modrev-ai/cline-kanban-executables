@@ -255,9 +255,27 @@ jobs:
             # The binary might be in different locations depending on npm prefix
             # IMPORTANT: Check npm global bin FIRST (newly installed version), then /usr/local/bin (old version)
             CLINE_BIN_PATH=""
-            NPM_GLOBAL_BIN=$(sudo -u "${ORACLE_USER}" bash -c 'npm bin -g 2>/dev/null' 2>/dev/null || echo "/home/${ORACLE_USER}/.npm-global/bin")
+            
+            # Get the actual npm global bin for the oracle user
+            NPM_GLOBAL_BIN=$(sudo -u "${ORACLE_USER}" bash -c 'npm bin -g 2>/dev/null' 2>/dev/null)
+            if [ -z "$NPM_GLOBAL_BIN" ]; then
+              NPM_GLOBAL_BIN="/home/${ORACLE_USER}/.npm-global/bin"
+            fi
+            echo "npm global bin: $NPM_GLOBAL_BIN"
+            
+            # Also get npm global root to find the package
+            NPM_GLOBAL_ROOT=$(sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null)
+            echo "npm global root: $NPM_GLOBAL_ROOT"
+            
+            # Check multiple possible locations for the cline binary
+            # Priority: npm global bin -> npm global root/cline/bin -> ~/.npm-global/bin -> /usr/local/bin
             if [ -f "${NPM_GLOBAL_BIN}/cline" ]; then
               CLINE_BIN_PATH="${NPM_GLOBAL_BIN}/cline"
+            elif [ -n "$NPM_GLOBAL_ROOT" ] && [ -f "${NPM_GLOBAL_ROOT}/cline/bin/cline" ]; then
+              CLINE_BIN_PATH="${NPM_GLOBAL_ROOT}/cline/bin/cline"
+            elif [ -n "$NPM_GLOBAL_ROOT" ] && [ -f "${NPM_GLOBAL_ROOT}/cline/cli.js" ]; then
+              # Some packages have cli.js instead of bin/cline
+              CLINE_BIN_PATH="${NPM_GLOBAL_ROOT}/cline/cli.js"
             elif [ -f "/home/${ORACLE_USER}/.npm-global/bin/cline" ]; then
               CLINE_BIN_PATH="/home/${ORACLE_USER}/.npm-global/bin/cline"
             elif [ -f "/usr/local/bin/cline" ]; then
@@ -269,8 +287,12 @@ jobs:
               sudo ln -sf "$CLINE_BIN_PATH" /usr/bin/cline
             else
               echo "WARNING: Could not find cline binary at npm global bin"
+              echo "Checking npm global bin directory:"
               sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/bin/' || true
-              sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/cline -type f -name "*.js" 2>/dev/null | head -20' || true
+              echo "Checking npm global root:"
+              sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/lib/node_modules/' || true
+              echo "Searching for cline in npm global root:"
+              sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/cline -type f \( -name "cline" -o -name "cli.js" \) 2>/dev/null | head -20' || true
               # Also check /usr/local/bin
               ls -la /usr/local/bin/ | grep cline || true
             fi
@@ -506,4 +528,4 @@ jobs:
       - name: Verify infrastructure deployment (single quick check)
         if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -o ConnectTimeout=30 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export ORACLE_USER='${{ env.ORACLE_USER }}' && export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' && set -euo pipefail && echo '=== Quick infrastructure verification ===' && node --version && npm --version && echo '=== Verifying cline version and source ===' && CLINE_VERSION=\$(/usr/bin/cline --version 2>/dev/null | head -1 || echo 'NOT FOUND') && echo \"cline version: \$CLINE_VERSION\" && NPM_GLOBAL_ROOT=\$(sudo -u \"\${ORACLE_USER}\" bash -c 'npm root -g 2>/dev/null' 2>/dev/null) && echo \"npm global root: \$NPM_GLOBAL_ROOT\" && CLINE_PKG_PATH=\"\${NPM_GLOBAL_ROOT}/cline/package.json\" && if [ ! -f \"\$CLINE_PKG_PATH\" ]; then echo \"WARNING: Could not find cline package.json at \$CLINE_PKG_PATH, checking alternative locations...\" >&2 && CLINE_PKG_PATH=\$(sudo -u \"\${ORACLE_USER}\" bash -c 'find ~/.npm-global/lib/node_modules/cline -name package.json 2>/dev/null | head -1' 2>/dev/null) && if [ ! -f \"\$CLINE_PKG_PATH\" ]; then echo \"ERROR: Could not find cline package.json anywhere\" >&2 && exit 1; fi; fi && echo \"Found cline package.json at: \$CLINE_PKG_PATH\" && CLINE_REPO=\$(grep -o '\"repository\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' \"\$CLINE_PKG_PATH\" 2>/dev/null | head -1 | sed 's/.*\"repository\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/' || echo '') && echo \"cline repository: \$CLINE_REPO\" && if [[ ! \"\$CLINE_REPO\" =~ modrev-ai/cline ]]; then echo 'ERROR: cline is not from modrev-ai/cline!' >&2 && exit 1; fi && echo '=== Verifying cline kanban command (built into cline) ===' && /usr/bin/cline kanban --help 2>&1 | head -5 || (echo 'ERROR: cline kanban command failed' >&2 && exit 1) && echo '=== Verifying http-proxy ===' && sudo -u \"\${ORACLE_USER}\" bash -c \"npm list -g http-proxy --depth=0 2>/dev/null\" || echo 'http-proxy not in global list' && systemctl list-unit-files | grep -E 'kanban-proxy|kanban-server' || (echo 'ERROR: Unit files not found' && exit 1) && sudo systemd-analyze verify /etc/systemd/system/kanban-proxy.service && sudo systemd-analyze verify /etc/systemd/system/kanban-server.service && sudo firewall-cmd --list-ports 2>/dev/null | grep -E '3484|3485' || echo 'Firewall ports check (may need manual verification)' && echo '=== Infrastructure verification complete ==='"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=120 -o ConnectTimeout=30 "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "export ORACLE_USER='${{ env.ORACLE_USER }}' && export DEPLOY_PATH='${{ env.DEPLOY_PATH }}' && set -euo pipefail && echo '=== Quick infrastructure verification ===' && node --version && npm --version && echo '=== Verifying cline version and source ===' && CLINE_VERSION=\$(/usr/bin/cline --version 2>/dev/null | head -1 || echo 'NOT FOUND') && echo \"cline version: \$CLINE_VERSION\" && NPM_GLOBAL_ROOT=\$(sudo -u \"\${ORACLE_USER}\" bash -c 'npm root -g 2>/dev/null' 2>/dev/null) && echo \"npm global root: \$NPM_GLOBAL_ROOT\" && NPM_GLOBAL_BIN=\$(sudo -u \"\${ORACLE_USER}\" bash -c 'npm bin -g 2>/dev/null' 2>/dev/null) && echo \"npm global bin: \$NPM_GLOBAL_BIN\" && CLINE_PKG_PATH=\"\" && if [ -n \"\$NPM_GLOBAL_ROOT\" ] && [ -f \"\${NPM_GLOBAL_ROOT}/cline/package.json\" ]; then CLINE_PKG_PATH=\"\${NPM_GLOBAL_ROOT}/cline/package.json\"; elif [ -f \"/home/\${ORACLE_USER}/.npm-global/lib/node_modules/cline/package.json\" ]; then CLINE_PKG_PATH=\"/home/\${ORACLE_USER}/.npm-global/lib/node_modules/cline/package.json\"; else CLINE_PKG_PATH=\$(sudo -u \"\${ORACLE_USER}\" bash -c 'find ~/.npm-global/lib/node_modules/cline -name package.json 2>/dev/null | head -1' 2>/dev/null); fi && if [ ! -f \"\$CLINE_PKG_PATH\" ]; then echo \"ERROR: Could not find cline package.json anywhere\" >&2 && exit 1; fi && echo \"Found cline package.json at: \$CLINE_PKG_PATH\" && CLINE_REPO=\$(grep -o '\"repository\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' \"\$CLINE_PKG_PATH\" 2>/dev/null | head -1 | sed 's/.*\"repository\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/' || echo '') && echo \"cline repository: \$CLINE_REPO\" && if [[ ! \"\$CLINE_REPO\" =~ modrev-ai/cline ]]; then echo 'ERROR: cline is not from modrev-ai/cline!' >&2 && exit 1; fi && echo '=== Verifying cline kanban command (built into cline) ===' && /usr/bin/cline kanban --help 2>&1 | head -5 || (echo 'ERROR: cline kanban command failed' >&2 && exit 1) && echo '=== Verifying http-proxy ===' && sudo -u \"\${ORACLE_USER}\" bash -c \"npm list -g http-proxy --depth=0 2>/dev/null\" || echo 'http-proxy not in global list' && systemctl list-unit-files | grep -E 'kanban-proxy|kanban-server' || (echo 'ERROR: Unit files not found' && exit 1) && sudo systemd-analyze verify /etc/systemd/system/kanban-proxy.service && sudo systemd-analyze verify /etc/systemd/system/kanban-server.service && sudo firewall-cmd --list-ports 2>/dev/null | grep -E '3484|3485' || echo 'Firewall ports check (may need manual verification)' && echo '=== Infrastructure verification complete ==='"
