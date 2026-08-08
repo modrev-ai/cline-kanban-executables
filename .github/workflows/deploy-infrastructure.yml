@@ -468,6 +468,19 @@ jobs:
           echo "=== Verifying unit files loaded ==="
           systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found after daemon-reload" && exit 1)
           
+          echo "=== Enabling and starting services ==="
+          sudo systemctl enable kanban-proxy
+          sudo systemctl start kanban-proxy
+          sudo systemctl enable kanban-server
+          sudo systemctl start kanban-server
+          
+          echo "=== Waiting for services to start ==="
+          sleep 5
+          
+          echo "=== Verifying services are running ==="
+          systemctl is-active kanban-proxy && echo "kanban-proxy is active" || (echo "ERROR: kanban-proxy failed to start" && systemctl status kanban-proxy && exit 1)
+          systemctl is-active kanban-server && echo "kanban-server is active" || (echo "ERROR: kanban-server failed to start" && systemctl status kanban-server && exit 1)
+          
           echo "=== Service files created successfully ==="
           cat /etc/systemd/system/kanban-proxy.service
           cat /etc/systemd/system/kanban-server.service
