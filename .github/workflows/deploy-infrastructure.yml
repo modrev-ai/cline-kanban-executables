@@ -53,6 +53,9 @@ jobs:
       ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY_B64 }}
       DEPLOY_INFRASTRUCTURE: ${{ inputs.deploy-infrastructure }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Setup SSH key
         if: ${{ env.DEPLOY_INFRASTRUCTURE == 'true' }}
         run: |
