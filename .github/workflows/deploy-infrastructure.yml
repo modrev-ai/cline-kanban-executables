@@ -249,13 +249,16 @@ jobs:
           if [ "$FORCE_CLINE_INSTALL" = true ]; then
             echo "Installing/updating cline to $CLINE_LATEST_VERSION from modrev-ai/cline..."
             # Use the tarball URL from GitHub releases
-            # Don't pipe to tail -10 so we can see actual errors
+            # Capture both stdout and stderr to see what's happening
+            echo "Running npm install command..."
             sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1
             CLINE_INSTALL_EXIT_CODE=$?
+            echo "npm install exit code: $CLINE_INSTALL_EXIT_CODE"
             if [ $CLINE_INSTALL_EXIT_CODE -ne 0 ]; then
               echo "ERROR: Failed to install cline from modrev-ai/cline (exit code: $CLINE_INSTALL_EXIT_CODE)"
               exit $CLINE_INSTALL_EXIT_CODE
             fi
+            echo "npm install completed successfully"
             
             # Find and create proper symlink for cline binary - use npm global bin directly since PATH may not include it
             # The binary might be in different locations depending on npm prefix
