@@ -136,13 +136,13 @@ jobs:
             sudo systemctl status kanban-proxy --no-pager -l || true
             sudo systemctl status kanban-server --no-pager -l || true
             echo "=== kanban-proxy logs (immediate) ==="
-            journalctl -u kanban-proxy --no-pager -l -n 50
-            echo "=== kanban-server logs (immediate) ==="
-            journalctl -u kanban-server --no-pager -l -n 50
+            journalctl -u kanban-proxy --no-pager -l -n 20
             echo "=== Listening ports ==="
             ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
             
-            echo "=== Verifying services restarted ==="
+            # Wait for services to be systemd-active only (HTTP readiness done by health-check.yml)
+            # cline kanban takes ~90s to initialize its HTTP endpoint - don't check HTTP here
+            echo "=== Verifying services are systemd-active ==="
             maxRetries=12
             retryDelay=5
             
@@ -151,11 +151,10 @@ jobs:
               
               proxyActive=false
               serverActive=false
-              proxyHttpReady=false
-              serverHttpReady=false
               
               if systemctl is-active --quiet kanban-proxy; then
                 proxyActive=true
+                echo "kanban-proxy: active"
               else
                 echo "kanban-proxy not active, status:"
                 sudo systemctl status kanban-proxy --no-pager -l
@@ -165,6 +164,7 @@ jobs:
               
               if systemctl is-active --quiet kanban-server; then
                 serverActive=true
+                echo "kanban-server: active"
               else
                 echo "kanban-server not active, status:"
                 sudo systemctl status kanban-server --no-pager -l
@@ -172,33 +172,8 @@ jobs:
                 journalctl -u kanban-server --no-pager -l -n 30
               fi
               
-              # Also verify HTTP connectivity
-              if [ "$proxyActive" = true ]; then
-                if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 3 2>/dev/null | grep -q "200"; then
-                  proxyHttpReady=true
-                else
-                  echo "kanban-proxy HTTP check failed on port 3484"
-                  echo "--- kanban-proxy recent logs ---"
-                  journalctl -u kanban-proxy --no-pager -l -n 50
-                  echo "--- Checking listening ports ---"
-                  ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
-                fi
-              fi
-              
-              if [ "$serverActive" = true ]; then
-                if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 3 2>/dev/null | grep -q "200"; then
-                  serverHttpReady=true
-                else
-                  echo "kanban-server HTTP check failed on port 3485"
-                  echo "--- kanban-server recent logs ---"
-                  journalctl -u kanban-server --no-pager -l -n 50
-                  echo "--- Checking listening ports ---"
-                  ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
-                fi
-              fi
-              
-              if [ "$proxyActive" = true ] && [ "$serverActive" = true ] && [ "$proxyHttpReady" = true ] && [ "$serverHttpReady" = true ]; then
-                echo "=== Both services are active and HTTP-ready ==="
+              if [ "$proxyActive" = true ] && [ "$serverActive" = true ]; then
+                echo "=== Both services are systemd-active ==="
                 break
               fi
               
@@ -208,7 +183,7 @@ jobs:
               fi
             done
             
-            # Final verification
+            # Final verification - only check systemd state, NOT HTTP (health-check.yml does that)
             if ! systemctl is-active --quiet kanban-proxy; then
               echo "ERROR: kanban-proxy not active after $maxRetries attempts" >&2
               sudo systemctl status kanban-proxy --no-pager -l
@@ -223,18 +198,7 @@ jobs:
               exit 1
             fi
             
-            # Final HTTP verification
-            if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 3 2>/dev/null | grep -q "200"; then
-              echo "ERROR: kanban-proxy not responding to HTTP on port 3484" >&2
-              exit 1
-            fi
-            
-            if ! curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 3 2>/dev/null | grep -q "200"; then
-              echo "ERROR: kanban-server not responding to HTTP on port 3485" >&2
-              exit 1
-            fi
-            
-            echo "=== Services restarted successfully and HTTP-ready ==="
+            echo "=== Services restarted successfully (HTTP readiness checked by health-check.yml) ==="
             systemctl status kanban-proxy --no-pager -l
             systemctl status kanban-server --no-pager -l
           ENDSSH
