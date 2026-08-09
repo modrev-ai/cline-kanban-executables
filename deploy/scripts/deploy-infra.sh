@@ -266,66 +266,9 @@ else
   fi
 fi
 
-echo "=== Installing kanban from modrev-ai/kanban (latest main branch) ==="
-# Since modrev-ai/kanban doesn't have GitHub releases, we use the main branch tarball
-# Get the latest commit SHA from main branch for version tracking
-KANABAN_LATEST_SHA=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/commits/main" 2>/dev/null | grep '"sha"' | head -1 | sed 's/.*"sha": "\([^"]*\)".*/\1/' | cut -c1-7 || echo "main")
-echo "Latest kanban commit from modrev-ai/kanban: $KANABAN_LATEST_SHA"
-
-# Check currently installed kanban version - use package.json to get actual version
-INSTALLED_KANABAN_VERSION=""
-INSTALLED_KANABAN_REPO=""
-if sudo -u "${ORACLE_USER}" bash -c 'npm list -g kanban --depth=0' &>/dev/null; then
-  INSTALLED_KANABAN_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'npm list -g kanban --depth=0 2>/dev/null | grep kanban@ | sed "s/.*kanban@\([^ ]*\).*/\1/"' || echo "")
-  echo "Currently installed kanban version: $INSTALLED_KANABAN_VERSION"
-  # Check if it's from modrev-ai/kanban by looking at package.json
-  KANABAN_PKG_PATH=$(sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null)/kanban/package.json
-  if [ -f "$KANABAN_PKG_PATH" ]; then
-    INSTALLED_KANABAN_REPO=$(grep -o '"repository"[^}]*' "$KANABAN_PKG_PATH" 2>/dev/null | head -1 || echo "")
-    echo "Installed kanban repository: $INSTALLED_KANABAN_REPO"
-  fi
-else
-  echo "kanban not currently installed globally"
-fi
-
-# Force reinstall if not from modrev-ai/kanban or if we can't verify
-FORCE_KANABAN_INSTALL=false
-if [ -z "$INSTALLED_KANABAN_VERSION" ]; then
-  echo "No kanban version detected"
-  FORCE_KANABAN_INSTALL=true
-elif [[ ! "$INSTALLED_KANABAN_REPO" =~ modrev-ai/kanban ]]; then
-  echo "Installed kanban is not from modrev-ai/kanban (repository: $INSTALLED_KANABAN_REPO), forcing reinstall"
-  FORCE_KANABAN_INSTALL=true
-else
-  echo "kanban is already from modrev-ai/kanban, skipping installation"
-fi
-
-if [ "$FORCE_KANABAN_INSTALL" = true ]; then
-  echo "Installing/updating kanban to latest from modrev-ai/kanban main branch..."
-  # Use the tarball URL from GitHub main branch
-  sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/kanban/tarball/main --omit=optional --maxsockets=1" 2>&1 | tail -10
-  
-  # Find and create proper symlink for kanban binary
-  if [ -f "/home/${ORACLE_USER}/.npm-global/bin/kanban" ]; then
-    echo "Found kanban binary at: /home/${ORACLE_USER}/.npm-global/bin/kanban"
-    sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
-  else
-    echo "WARNING: Could not find kanban binary at npm global bin"
-    sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/bin/' || true
-    sudo -u "${ORACLE_USER}" bash -c 'find ~/.npm-global/lib/node_modules/kanban -type f -name "*.js" 2>/dev/null | head -20' || true
-  fi
-else
-  echo "kanban is already from modrev-ai/kanban, skipping installation"
-  # Ensure symlink exists even if skipping installation
-  if [ ! -f "/usr/bin/kanban" ]; then
-    if [ -f "/home/${ORACLE_USER}/.npm-global/bin/kanban" ]; then
-      sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
-    fi
-  fi
-fi
-
 echo "=== Verifying cline kanban command (built into cline) ==="
 # kanban is a built-in command of cline, not a separate package
+# No need to install kanban separately - it's included in the cline package
 # Verify it's available using the full path
 if /usr/bin/cline kanban --help &>/dev/null; then
   echo "cline kanban command is available"
