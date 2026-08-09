@@ -69,6 +69,12 @@ sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/node /usr/bin/node
 sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npm /usr/bin/npm
 sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npx /usr/bin/npx
 
+# Fix SELinux context for Node.js binary (required on Oracle Linux with SELinux enforcing)
+# Files moved from /tmp retain tmp_t context; restorecon sets them to the correct usr_t/bin_t
+echo "=== Fixing SELinux context for Node.js binary ==="
+sudo restorecon -Rv /usr/local/lib/nodejs/ 2>/dev/null || true
+sudo restorecon -v /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
+
 # Verify installation
 /usr/bin/node --version
 /usr/bin/npm --version

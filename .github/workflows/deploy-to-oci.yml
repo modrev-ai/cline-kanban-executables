@@ -99,13 +99,17 @@ jobs:
             which cline 2>/dev/null || echo "WARNING: cline not in PATH!"
             cline --version 2>/dev/null || echo "WARNING: cline version check failed!"
             
-            # Fix SELinux context if needed
+            # Fix SELinux context on node binary (files moved from /tmp retain tmp_t context)
+            sudo restorecon -Rv /usr/local/lib/nodejs/ 2>/dev/null || true
+            sudo restorecon -v /usr/bin/node /usr/bin/npm /usr/bin/npx /usr/bin/cline 2>/dev/null || true
+            
+            # Fix SELinux context on service files
             sudo restorecon -v /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || true
             
             sudo systemctl daemon-reload
             
-            # Check if services exist
-            if systemctl list-unit-files | grep -q "kanban-proxy.service"; then
+            # Check if services exist (use direct file check, more reliable than systemctl list-unit-files)
+            if [ -f /etc/systemd/system/kanban-proxy.service ]; then
               echo "Services exist, restarting..."
               sudo systemctl restart kanban-proxy kanban-server
             else
@@ -114,10 +118,10 @@ jobs:
               sudo systemctl start kanban-proxy kanban-server
             fi
             
-            # Immediate status check
+            # Immediate status check (use || true so non-zero exit from 'failed' service doesn't abort)
             echo "=== Immediate service status after start ==="
-            sudo systemctl status kanban-proxy --no-pager -l
-            sudo systemctl status kanban-server --no-pager -l
+            sudo systemctl status kanban-proxy --no-pager -l || true
+            sudo systemctl status kanban-server --no-pager -l || true
             echo "=== kanban-proxy logs (immediate) ==="
             journalctl -u kanban-proxy --no-pager -l -n 50
             echo "=== kanban-server logs (immediate) ==="
