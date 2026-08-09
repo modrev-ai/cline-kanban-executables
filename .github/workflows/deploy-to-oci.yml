@@ -106,6 +106,9 @@ jobs:
             # Fix SELinux context on service files
             sudo restorecon -v /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || true
             
+            # Fix SELinux context on deployed application files (SCP-transferred files retain wrong context)
+            sudo restorecon -Rv "${{ env.DEPLOY_PATH }}/" 2>/dev/null || true
+            
             sudo systemctl daemon-reload
             
             # Check if services exist (use direct file check, more reliable than systemctl list-unit-files)
