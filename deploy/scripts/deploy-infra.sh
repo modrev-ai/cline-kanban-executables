@@ -354,7 +354,7 @@ Type=simple
 User=${ORACLE_USER}
 WorkingDirectory=${DEPLOY_PATH}/prod_executable
 Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
-ExecStart=/usr/bin/node kanban-proxy.js
+ExecStart=/usr/bin/node --jitless kanban-proxy.js
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
