@@ -95,51 +95,33 @@ jobs:
 
       - name: Verify deployment with HTTP health checks
         run: |
+          # Note: kanban-server (cline kanban) binds to 127.0.0.1:3485 (localhost only).
+          # We verify it indirectly via the proxy on 3484 (which forwards to 3485).
+          # The proxy returning 200 confirms both services are healthy end-to-end.
+          # cline kanban takes ~90s to initialize its HTTP endpoint after startup.
           maxRetries=15
           retryDelay=20
           proxyUrl="http://${ORACLE_HOST}:3484"
-          serverUrl="http://${ORACLE_HOST}:3485"
           
-          echo "Testing Kanban Proxy at $proxyUrl..."
-          echo "Testing Kanban Server at $serverUrl..."
+          echo "Testing Kanban Proxy at $proxyUrl (proxy forwards to server on 3485)..."
+          echo "Note: cline kanban takes ~90s to init - will retry for up to 5 minutes"
           
           proxySuccess=false
-          serverSuccess=false
           
           for i in $(seq 1 $maxRetries); do
             echo "Attempt $i of $maxRetries..."
             
-            # Test proxy
-            if [ "$proxySuccess" = false ]; then
-              if response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$proxyUrl" 2>/dev/null); then
-                if [ "$response" = "200" ]; then
-                  echo "[OK] Kanban Proxy responded with HTTP 200"
-                  proxySuccess=true
-                else
-                  echo "[FAIL] Kanban Proxy returned HTTP $response"
-                fi
+            # Test proxy (which also verifies the backend server is ready)
+            if response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$proxyUrl" 2>/dev/null); then
+              if [ "$response" = "200" ]; then
+                echo "[OK] Kanban Proxy responded with HTTP 200 (backend server is ready)"
+                proxySuccess=true
+                break
               else
-                echo "[FAIL] Kanban Proxy connection failed"
+                echo "[INFO] Kanban Proxy returned HTTP $response (server may still be initializing)"
               fi
-            fi
-            
-            # Test server
-            if [ "$serverSuccess" = false ]; then
-              if response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$serverUrl" 2>/dev/null); then
-                if [ "$response" = "200" ]; then
-                  echo "[OK] Kanban Server responded with HTTP 200"
-                  serverSuccess=true
-                else
-                  echo "[FAIL] Kanban Server returned HTTP $response"
-                fi
-              else
-                echo "[FAIL] Kanban Server connection failed"
-              fi
-            fi
-            
-            if [ "$proxySuccess" = true ] && [ "$serverSuccess" = true ]; then
-              echo "[OK] Both services are healthy!"
-              break
+            else
+              echo "[INFO] Kanban Proxy connection attempt $i failed (server may still be initializing)"
             fi
             
             if [ $i -lt $maxRetries ]; then
@@ -150,16 +132,11 @@ jobs:
           
           # Final verification
           if [ "$proxySuccess" = false ]; then
-            echo "FAILED: Kanban Proxy (port 3484) did not respond successfully after $maxRetries attempts" >&2
+            echo "FAILED: Kanban Proxy (port 3484) did not respond with HTTP 200 after $maxRetries attempts" >&2
             exit 1
           fi
           
-          if [ "$serverSuccess" = false ]; then
-            echo "FAILED: Kanban Server (port 3485) did not respond successfully after $maxRetries attempts" >&2
-            exit 1
-          fi
-          
-          echo "[OK] Deployment verification PASSED - Both services are accessible!"
+          echo "[OK] Deployment verification PASSED - Kanban Proxy is accessible and backend server is ready!"
 
       - name: Deployment summary
         run: |
