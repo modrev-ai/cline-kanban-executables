@@ -216,8 +216,15 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
     CLINE_BIN_PATH="/home/${ORACLE_USER}/.npm-global/bin/cline"
     echo "DEBUG: Found at ~/.npm-global/bin/cline"
   elif [ -f "/usr/local/bin/cline" ]; then
-    CLINE_BIN_PATH="/usr/local/bin/cline"
-    echo "DEBUG: Found at /usr/local/bin/cline"
+    # Only use /usr/local/bin/cline as fallback if it's the newly installed version
+    # Check if it's actually the new version by checking its package.json
+    CLINE_PKG_AT_USR_LOCAL=$(dirname "$(readlink -f /usr/local/bin/cline 2>/dev/null || echo /usr/local/bin/cline)")/../lib/node_modules/cline/package.json
+    if [ -f "$CLINE_PKG_AT_USR_LOCAL" ] && grep -q "modrev-ai/cline" "$CLINE_PKG_AT_USR_LOCAL" 2>/dev/null; then
+      CLINE_BIN_PATH="/usr/local/bin/cline"
+      echo "DEBUG: Found at /usr/local/bin/cline (verified as modrev-ai version)"
+    else
+      echo "DEBUG: /usr/local/bin/cline exists but is not modrev-ai version, skipping"
+    fi
   fi
   
   if [ -n "$CLINE_BIN_PATH" ] && [ -f "$CLINE_BIN_PATH" ]; then
@@ -445,18 +452,13 @@ sudo systemd-analyze verify /etc/systemd/system/kanban-server.service
 echo "=== Verifying unit files loaded ==="
 systemctl list-unit-files | grep -E "kanban-proxy|kanban-server" || (echo "ERROR: Unit files not found after daemon-reload" && exit 1)
 
-echo "=== Enabling and starting services ==="
+echo "=== Enabling services (will start on boot, but not starting now - files will be deployed later) ==="
 sudo systemctl enable kanban-proxy
-sudo systemctl start kanban-proxy
 sudo systemctl enable kanban-server
-sudo systemctl start kanban-server
 
-echo "=== Waiting for services to start ==="
-sleep 5
-
-echo "=== Verifying services are running ==="
-systemctl is-active kanban-proxy && echo "kanban-proxy is active" || (echo "ERROR: kanban-proxy failed to start" && systemctl status kanban-proxy && exit 1)
-systemctl is-active kanban-server && echo "kanban-server is active" || (echo "ERROR: kanban-server failed to start" && systemctl status kanban-server && exit 1)
+echo "=== Services enabled successfully (not started yet - waiting for application deployment) ==="
+# Don't start services here - they will be started in deploy-to-oci.yml after files are deployed
+# This avoids exit code 203/EXEC when kanban-proxy.js doesn't exist yet
 
 echo "=== Service files created successfully ==="
 cat /etc/systemd/system/kanban-proxy.service
