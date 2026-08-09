@@ -106,13 +106,18 @@ jobs:
             # Fix SELinux context on service files
             sudo restorecon -v /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || true
             
-            # Fix SELinux context on deployed application files
-            # Use chcon to set var_t (accessible by services), NOT restorecon which would set
-            # user_home_t context that unconfined_service_t processes cannot read
-            sudo chcon -R -t var_t "${{ env.DEPLOY_PATH }}/prod_executable/" 2>/dev/null || \
-            sudo chcon -R -t usr_t "${{ env.DEPLOY_PATH }}/prod_executable/" 2>/dev/null || true
-            # Also ensure read permissions are correct
-            chmod -R a+rX "${{ env.DEPLOY_PATH }}/prod_executable/" 2>/dev/null || true
+            # Move kanban-proxy.js to system location to avoid SELinux home-dir restrictions.
+            # Files in user home dirs get user_home_t context; systemd services cannot read them.
+            # /usr/local/lib/ gets lib_t/usr_t context via restorecon, which services CAN read.
+            sudo mkdir -p /usr/local/lib/kanban
+            sudo cp "${{ env.DEPLOY_PATH }}/prod_executable/kanban-proxy.js" /usr/local/lib/kanban/kanban-proxy.js
+            sudo chown root:root /usr/local/lib/kanban/kanban-proxy.js
+            sudo chmod 644 /usr/local/lib/kanban/kanban-proxy.js
+            sudo restorecon -Rv /usr/local/lib/kanban/ 2>/dev/null || true
+            # Update service to use the system location
+            sudo sed -i 's|WorkingDirectory=.*/prod_executable|WorkingDirectory=/usr/local/lib/kanban|g' /etc/systemd/system/kanban-proxy.service
+            echo "=== Updated kanban-proxy.service ==="
+            cat /etc/systemd/system/kanban-proxy.service
             
             sudo systemctl daemon-reload
             
