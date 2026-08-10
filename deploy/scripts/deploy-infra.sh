@@ -280,11 +280,11 @@ echo "=== Installing kanban from modrev-ai/kanban (latest release) ==="
 # package to npm, so we resolve the newest release tag from that repo and install
 # that exact version from the registry.
 #
-# Resolve the latest real release tag, filtering out the placeholder (vX.Y.Z-modrev).
-KANBAN_LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/releases" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' | grep -vE '\-modrev' | head -1 || echo "")
+# Resolve the most recent release tag (releases API returns newest first).
+KANBAN_LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/releases" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' | head -1 || echo "")
 if [ -z "$KANBAN_LATEST_TAG" ]; then
   # Fall back to the tags API if the releases API returns nothing (e.g. releases not published)
-  KANBAN_LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/tags" 2>/dev/null | grep '"name"' | sed 's/.*"name": "\([^"]*\)".*/\1/' | grep -vE '\-modrev' | head -1 || echo "")
+  KANBAN_LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/tags" 2>/dev/null | grep '"name"' | sed 's/.*"name": "\([^"]*\)".*/\1/' | head -1 || echo "")
 fi
 if [ -z "$KANBAN_LATEST_TAG" ]; then
   echo "ERROR: Could not determine the latest kanban release from modrev-ai/kanban" >&2
