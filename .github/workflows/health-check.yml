@@ -56,63 +56,117 @@ jobs:
           ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" \
             'echo "=== kanban-proxy status ==="; systemctl status kanban-proxy --no-pager -l; echo; echo "=== kanban-server status ==="; systemctl status kanban-server --no-pager -l; echo; echo "=== Port status ==="; ss -tlnp | grep -E ":3484|:3485" || echo "No services on 3484/3485 yet"; echo; echo "=== Tailscale status ==="; tailscale status 2>/dev/null || echo "Tailscale not running"'
 
-      - name: Verify deployment with HTTP health checks (via SSH on Oracle)
+      - name: Verify deployment (backend, proxy end-to-end, external reachability)
+        env:
+          # Public port users actually hit (the proxy binds 0.0.0.0:3484). 3485 is localhost-only.
+          PUBLIC_PORT: '3484'
+          BACKEND_PORT: '3485'
         run: |
-          # Test kanban-server directly on port 3485 (localhost-only) via SSH.
-          # NOTE: The kanban-proxy (3484→3485) may get EACCES from SELinux preventing
-          # inter-service connections. We test port 3485 directly, which confirms the
-          # core kanban server is running and accepting HTTP connections. cline kanban
-          # takes ~90s to initialize its HTTP endpoint after service start.
-          maxRetries=18
-          retryDelay=20
+          set -uo pipefail
 
-          echo "Testing Kanban Server on port 3485 via SSH on Oracle instance..."
-          echo "Note: cline kanban takes ~90s to init - will retry for up to 6 minutes"
-
-          serverSuccess=false
-
-          for i in $(seq 1 $maxRetries); do
-            echo "Attempt $i of $maxRetries..."
-
-            # Run curl on the Oracle instance itself (bypasses external firewall).
-            # curl -w "%{http_code}" outputs "000" on connection errors.
-            response=$(ssh -i ~/.ssh/oracle_key \
+          ssh_curl() {
+            # $1 = URL to curl from *on* the Oracle instance. Prints the HTTP status ("000" on error).
+            ssh -i ~/.ssh/oracle_key \
               -o UserKnownHostsFile=~/.ssh/known_hosts \
               -o ConnectTimeout=10 \
               "${ORACLE_USER}@${ORACLE_HOST}" \
-              'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3485 --max-time 15 2>/dev/null; true')
+              "curl -s -o /dev/null -w '%{http_code}' '$1' --max-time 15 2>/dev/null; true"
+          }
 
-            echo "  Kanban Server (port 3485) HTTP response: $response"
-
-            # Accept any non-error HTTP response (2xx or 3xx) as success.
-            # 200 = OK, 304 = Not Modified; both mean server is alive and serving.
+          # ---------------------------------------------------------------------------
+          # 1) Backend liveness: kanban-server on 127.0.0.1:3485 (localhost, via SSH).
+          #    cline kanban takes ~60-90s to initialize its HTTP endpoint after start.
+          # ---------------------------------------------------------------------------
+          echo "=== [1/3] Waiting for backend kanban-server (127.0.0.1:${BACKEND_PORT}) ==="
+          backendReady=false
+          for i in $(seq 1 18); do
+            echo "Attempt $i of 18..."
+            response=$(ssh_curl "http://127.0.0.1:${BACKEND_PORT}")
+            echo "  Backend (port ${BACKEND_PORT}) HTTP response: $response"
             if echo "$response" | grep -qE "^[23][0-9][0-9]$"; then
-              echo "[OK] Kanban Server responded with HTTP $response (server is ready)"
-              serverSuccess=true
+              echo "[OK] Backend responded with HTTP $response"
+              backendReady=true
               break
-            elif [ "$response" = "000" ]; then
-              echo "[INFO] Server connection timed out - may still be initializing"
-            else
-              echo "[INFO] Server returned HTTP $response - may still be initializing"
             fi
-
-            if [ $i -lt $maxRetries ]; then
-              echo "Waiting $retryDelay seconds before retry..."
-              sleep $retryDelay
-            fi
+            [ $i -lt 18 ] && { echo "Waiting 20s before retry..."; sleep 20; }
           done
 
-          # Final verification
-          if [ "$serverSuccess" = false ]; then
-            echo "FAILED: Kanban Server (port 3485) did not respond after $maxRetries attempts" >&2
-            echo ""
-            echo "=== Final diagnostics ==="
+          if [ "$backendReady" = false ]; then
+            echo "FAILED: backend kanban-server (port ${BACKEND_PORT}) did not respond" >&2
             ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" \
-              'echo "--- Port bindings ---"; ss -tlnp | grep -E "3484|3485" || echo "No bindings on 3484/3485"; echo "--- kanban-proxy logs ---"; journalctl -u kanban-proxy --no-pager -l -n 20; echo "--- kanban-server logs ---"; journalctl -u kanban-server --no-pager -l -n 30' || true
+              'echo "--- Port bindings ---"; ss -tlnp | grep -E "3484|3485" || echo "none"; echo "--- kanban-server logs ---"; journalctl -u kanban-server --no-pager -l -n 40' || true
             exit 1
           fi
 
-          echo "[OK] Deployment verification PASSED - Kanban Server is accessible and serving HTTP!"
+          # ---------------------------------------------------------------------------
+          # 2) Proxy end-to-end (the port exposed publicly): 127.0.0.1:3484 -> 3485,
+          #    tested on the instance itself. This is what actually breaks when the
+          #    proxy can't reach the backend (SELinux EACCES -> 502). FATAL on failure.
+          # ---------------------------------------------------------------------------
+          echo "=== [2/3] Verifying proxy end-to-end (127.0.0.1:${PUBLIC_PORT} -> ${BACKEND_PORT}) ==="
+          proxyReady=false
+          for i in $(seq 1 6); do
+            echo "Attempt $i of 6..."
+            response=$(ssh_curl "http://127.0.0.1:${PUBLIC_PORT}")
+            echo "  Proxy (port ${PUBLIC_PORT}) HTTP response: $response"
+            if echo "$response" | grep -qE "^[23][0-9][0-9]$"; then
+              echo "[OK] Proxy forwarded to the backend and returned HTTP $response"
+              proxyReady=true
+              break
+            elif [ "$response" = "502" ]; then
+              echo "[INFO] Proxy returned 502 (cannot reach backend yet) - retrying"
+            fi
+            [ $i -lt 6 ] && { echo "Waiting 10s before retry..."; sleep 10; }
+          done
+
+          if [ "$proxyReady" = false ]; then
+            echo "FAILED: proxy on port ${PUBLIC_PORT} is not forwarding to the backend." >&2
+            echo "This is the on-box failure that makes http://<public-ip>:${PUBLIC_PORT} unreachable." >&2
+            echo "" >&2
+            echo "Most likely cause: SELinux is denying the proxy's connect() to 127.0.0.1:${BACKEND_PORT} (EACCES)." >&2
+            ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" \
+              'echo "--- SELinux mode ---"; getenforce 2>/dev/null || echo "n/a"; echo "--- Port bindings ---"; ss -tlnp | grep -E "3484|3485" || echo "none"; echo "--- kanban-proxy logs ---"; journalctl -u kanban-proxy --no-pager -l -n 30' || true
+            exit 1
+          fi
+
+          # ---------------------------------------------------------------------------
+          # 3) External reachability: from this runner over the public internet to
+          #    http://<ORACLE_HOST>:3484. Non-fatal: a failure here (while step 2 passed)
+          #    means the OCI VCN Security List / NSG has no ingress rule for the port,
+          #    which cannot be configured from inside the instance.
+          # ---------------------------------------------------------------------------
+          echo "=== [3/3] Verifying EXTERNAL reachability (public internet -> host:${PUBLIC_PORT}) ==="
+          externalOk=false
+          for i in $(seq 1 3); do
+            echo "Attempt $i of 3..."
+            response=$(curl -s -o /dev/null -w '%{http_code}' "http://${ORACLE_HOST}:${PUBLIC_PORT}" --max-time 15 2>/dev/null || echo "000")
+            echo "  External (host:${PUBLIC_PORT}) HTTP response: $response"
+            if echo "$response" | grep -qE "^[23][0-9][0-9]$"; then
+              externalOk=true
+              break
+            fi
+            [ $i -lt 3 ] && sleep 8
+          done
+
+          echo "EXTERNAL_OK=$externalOk" >> "$GITHUB_ENV"
+          if [ "$externalOk" = true ]; then
+            echo "[OK] The web app is reachable over the public internet at http://<host>:${PUBLIC_PORT}"
+          else
+            echo "::warning title=External access blocked::Proxy works on the instance but http://<host>:${PUBLIC_PORT} is NOT reachable from the internet. Open ingress for TCP ${PUBLIC_PORT} in the OCI VCN Security List (or the instance's Network Security Group)."
+            echo ""
+            echo "############################################################################"
+            echo "# The app works on the instance but is NOT reachable from the internet.     "
+            echo "# The instance firewall and proxy are fine; the OCI cloud network is not.   "
+            echo "#                                                                           "
+            echo "# Fix (OCI Console): Networking > Virtual Cloud Networks > <your VCN> >     "
+            echo "#   Security Lists > <subnet's list> > Add Ingress Rule:                    "
+            echo "#     Stateless: No | Source Type: CIDR | Source CIDR: 0.0.0.0/0            "
+            echo "#     IP Protocol: TCP | Destination Port Range: ${PUBLIC_PORT}             "
+            echo "# (If the subnet uses a Network Security Group, add the same rule there.)   "
+            echo "############################################################################"
+          fi
+
+          echo "[OK] On-instance verification PASSED (backend + proxy end-to-end healthy)."
 
       - name: Deployment summary
         run: |
@@ -127,16 +181,24 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Services Deployed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- kanban-proxy.service (port 3484 - header rewriting proxy)" >> $GITHUB_STEP_SUMMARY
-          echo "- kanban-server.service (port 3485 - Kanban app)" >> $GITHUB_STEP_SUMMARY
+          echo "- kanban-proxy.service (port 3484 - **public** header-rewriting proxy, binds 0.0.0.0)" >> $GITHUB_STEP_SUMMARY
+          echo "- kanban-server.service (port 3485 - Kanban app, **internal only**, binds 127.0.0.1)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Access" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          # Get Tailscale IP if available, otherwise use direct IP
+          echo "Use port **3484** (the proxy). Port 3485 is bound to 127.0.0.1 and is NOT reachable externally by design." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          # Get Tailscale IP if available
           tailscaleIp=$(ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" 'tailscale ip -4 2>/dev/null || echo ""')
           if [ -n "$tailscaleIp" ]; then
-            echo "- **Kanban Proxy (Tailscale)**: http://$tailscaleIp:3484" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- **Kanban Proxy (Direct)**: http://${ORACLE_HOST}:3484" >> $GITHUB_STEP_SUMMARY
+            echo "- **Kanban (Tailscale)**: http://$tailscaleIp:3484" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "- **Kanban Server (Direct)**: http://${ORACLE_HOST}:3485" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kanban (Public)**: http://${ORACLE_HOST}:3484" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${EXTERNAL_OK:-false}" = "true" ]; then
+            echo "✅ Verified reachable from the public internet on port 3484." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ The app is healthy on the instance but was **not reachable from the public internet** on port 3484." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Add an ingress rule for **TCP 3484** (Source \`0.0.0.0/0\`) to the subnet's **OCI VCN Security List** (or the instance's Network Security Group). This is a cloud-network setting and cannot be changed from inside the instance." >> $GITHUB_STEP_SUMMARY
+          fi
