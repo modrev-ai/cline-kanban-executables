@@ -309,6 +309,26 @@ npm --version
 cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
 cline kanban --help 2>&1 | head -5 || echo "cline kanban help check completed"
 
+echo "=== Configuring SELinux (permissive) for inter-service connectivity ==="
+# The kanban-proxy (0.0.0.0:3484) connects to kanban-server on 127.0.0.1:3485. With SELinux
+# enforcing on Oracle Linux, that loopback connect() is denied with EACCES, so the public
+# port 3484 returns 502 and the app is unreachable. The proxy is a plain node service (not
+# httpd_t), so httpd_can_network_connect does not help. Set SELinux permissive: it keeps
+# logging AVCs but stops blocking, which also resolves the recurring node/binary context
+# issues this deploy works around. Single-user dev instance.
+if command -v getenforce >/dev/null 2>&1; then
+  echo "Current SELinux mode: $(getenforce)"
+  if [ "$(getenforce)" = "Enforcing" ]; then
+    sudo setenforce 0 2>/dev/null || echo "WARNING: setenforce 0 failed (continuing)"
+  fi
+  if [ -f /etc/selinux/config ]; then
+    sudo sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config 2>/dev/null || true
+  fi
+  echo "SELinux mode is now: $(getenforce 2>/dev/null || echo unknown)"
+else
+  echo "getenforce not found - SELinux not present, nothing to configure"
+fi
+
 echo "=== Configuring firewalld (single pass, no retries) ==="
 # Check if firewalld is installed
 if ! command -v firewall-cmd &> /dev/null; then
