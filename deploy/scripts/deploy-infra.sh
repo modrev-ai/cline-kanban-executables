@@ -255,11 +255,8 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
   echo "DEBUG: Running /usr/bin/cline --version"
   /usr/bin/cline --version
   echo "DEBUG: cline --version completed"
-  
-  # Also verify cline kanban command works
-  echo "Verifying cline kanban command..."
-  /usr/bin/cline kanban --help 2>&1 | head -5
-  echo "DEBUG: cline kanban --help completed"
+  # Note: the kanban board is served by the standalone kanban package (installed
+  # below from modrev-ai/kanban), not by cline's bundled `kanban` subcommand.
 else
   echo "cline is already at the correct modrev-ai version ($CLINE_LATEST_VERSION), skipping installation"
   # Ensure symlink exists even if skipping installation
@@ -272,14 +269,49 @@ else
   fi
 fi
 
-echo "=== Verifying cline kanban command (built into cline) ==="
-# kanban is a built-in command of cline, not a separate package
-# No need to install kanban separately - it's included in the cline package
-# Verify it's available using the full path
-if /usr/bin/cline kanban --help &>/dev/null; then
-  echo "cline kanban command is available"
+echo "=== Installing kanban from modrev-ai/kanban (latest release) ==="
+# kanban is installed as its own package (not the bundled `cline kanban` subcommand),
+# pinned to modrev-ai/kanban's most recent GitHub release.
+#
+# Why npm-by-version instead of a GitHub source tarball (as we do for cline):
+# modrev-ai/kanban does NOT commit dist/ (it is gitignored and built by the
+# release pipeline), so a raw source tarball has no dist/cli.js and installs a
+# broken `kanban` bin. Each modrev-ai/kanban GitHub release publishes the built
+# package to npm, so we resolve the newest release tag from that repo and install
+# that exact version from the registry.
+#
+# Resolve the latest real release tag, filtering out the placeholder (vX.Y.Z-modrev).
+KANBAN_LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/releases" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' | grep -vE '\-modrev' | head -1 || echo "")
+if [ -z "$KANBAN_LATEST_TAG" ]; then
+  # Fall back to the tags API if the releases API returns nothing (e.g. releases not published)
+  KANBAN_LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/tags" 2>/dev/null | grep '"name"' | sed 's/.*"name": "\([^"]*\)".*/\1/' | grep -vE '\-modrev' | head -1 || echo "")
+fi
+if [ -z "$KANBAN_LATEST_TAG" ]; then
+  echo "ERROR: Could not determine the latest kanban release from modrev-ai/kanban" >&2
+  exit 1
+fi
+echo "Latest kanban release from modrev-ai/kanban: $KANBAN_LATEST_TAG"
+# Normalize (strip leading 'v') to the npm version specifier
+KANBAN_TARGET_VERSION="${KANBAN_LATEST_TAG#v}"
+
+# Check the currently installed kanban version so we only reinstall when it differs
+INSTALLED_KANBAN_VERSION=""
+if sudo -u "${ORACLE_USER}" bash -c 'command -v kanban' &>/dev/null; then
+  INSTALLED_KANBAN_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'kanban --version 2>/dev/null' | head -1 | sed 's/^v//' || echo "")
+  echo "Currently installed kanban version: $INSTALLED_KANBAN_VERSION"
 else
-  echo "WARNING: cline kanban command not found - may need to rebuild cline"
+  echo "kanban not currently installed"
+fi
+
+if [ "$INSTALLED_KANBAN_VERSION" != "$KANBAN_TARGET_VERSION" ]; then
+  echo "Installing/updating kanban to $KANBAN_TARGET_VERSION from modrev-ai/kanban release..."
+  if ! sudo -u "${ORACLE_USER}" bash -c "npm install -g kanban@${KANBAN_TARGET_VERSION} --omit=optional --maxsockets=1" 2>&1; then
+    echo "ERROR: Failed to install kanban@${KANBAN_TARGET_VERSION}" >&2
+    exit 1
+  fi
+  echo "kanban install completed successfully"
+else
+  echo "kanban is already at the latest release version ($KANBAN_TARGET_VERSION), skipping installation"
 fi
 
 echo "=== Creating cline symlink ==="
@@ -295,19 +327,35 @@ else
 fi
 
 echo "=== Creating kanban symlink ==="
-# Find actual kanban binary location - use npm global bin directly
+# Find actual kanban binary location - use npm global bin directly.
+# kanban is now a required standalone install (the kanban-server service runs it),
+# so a missing binary is a hard failure rather than a warning.
+KANBAN_BIN_PATH=""
 if [ -f "/home/${ORACLE_USER}/.npm-global/bin/kanban" ]; then
-  echo "Found kanban at: /home/${ORACLE_USER}/.npm-global/bin/kanban"
-  sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
+  KANBAN_BIN_PATH="/home/${ORACLE_USER}/.npm-global/bin/kanban"
 else
-  echo "WARNING: Could not find kanban binary at npm global bin"
+  # Fall back to the npm global root reported for the oracle user
+  NPM_GLOBAL_ROOT_KANBAN=$(timeout 10 sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null || echo "")
+  if [ -n "$NPM_GLOBAL_ROOT_KANBAN" ] && [ -f "${NPM_GLOBAL_ROOT_KANBAN}/kanban/dist/cli.js" ]; then
+    KANBAN_BIN_PATH="${NPM_GLOBAL_ROOT_KANBAN}/kanban/dist/cli.js"
+  fi
+fi
+if [ -n "$KANBAN_BIN_PATH" ] && [ -f "$KANBAN_BIN_PATH" ]; then
+  echo "Found kanban at: $KANBAN_BIN_PATH"
+  sudo ln -sf "$KANBAN_BIN_PATH" /usr/bin/kanban
+else
+  echo "ERROR: Could not find kanban binary after install" >&2
+  sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/bin/ 2>/dev/null' || true
+  sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/lib/node_modules/kanban/ 2>/dev/null' || true
+  exit 1
 fi
 
 echo "=== Verifying installation ==="
 node --version
 npm --version
 cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
-cline kanban --help 2>&1 | head -5 || echo "cline kanban help check completed"
+echo "=== Verifying kanban (standalone, from modrev-ai/kanban) ==="
+/usr/bin/kanban --version 2>&1 | head -1 || (echo "ERROR: kanban --version failed" >&2 && exit 1)
 
 echo "=== Configuring SELinux (permissive) for inter-service connectivity ==="
 # The kanban-proxy (0.0.0.0:3484) connects to kanban-server on 127.0.0.1:3485. With SELinux
@@ -387,7 +435,7 @@ SVC_EOF
 echo "=== Creating kanban-server service ==="
 sudo tee /etc/systemd/system/kanban-server.service > /dev/null << SVC_EOF
 [Unit]
-Description=Kanban Server (Cline)
+Description=Kanban Server (modrev-ai/kanban)
 After=network.target
 
 [Service]
@@ -398,7 +446,10 @@ Environment=KANBAN_RUNTIME_HOST=127.0.0.1
 Environment=KANBAN_RUNTIME_PORT=3485
 Environment=NODE_ENV=production
 Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
-ExecStart=/usr/bin/cline kanban
+# Standalone kanban from modrev-ai/kanban's latest release. It binds to
+# KANBAN_RUNTIME_HOST:KANBAN_RUNTIME_PORT (set above), a drop-in for the previous
+# `cline kanban`. --no-open suppresses the browser launch on this headless box.
+ExecStart=/usr/bin/kanban --no-open
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

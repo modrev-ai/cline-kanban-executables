@@ -75,7 +75,7 @@ jobs:
 
           # ---------------------------------------------------------------------------
           # 1) Backend liveness: kanban-server on 127.0.0.1:3485 (localhost, via SSH).
-          #    cline kanban takes ~60-90s to initialize its HTTP endpoint after start.
+          #    kanban takes ~60-90s to initialize its HTTP endpoint after start.
           # ---------------------------------------------------------------------------
           echo "=== [1/3] Waiting for backend kanban-server (127.0.0.1:${BACKEND_PORT}) ==="
           backendReady=false

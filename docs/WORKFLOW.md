@@ -216,9 +216,10 @@ base64 -i ~/.ssh/oracle_key | tr -d '\n'
    - Install git, configure npm for low memory
    - Install `http-proxy` globally
    - Install latest `cline` from `modrev-ai/cline` releases
+   - Install latest `kanban` from `modrev-ai/kanban` releases
 6. **Create & Deploy systemd Services**:
    - `kanban-proxy.service` (port 3484, header rewriting proxy)
-   - `kanban-server.service` (port 3485, Kanban app via `cline kanban`)
+   - `kanban-server.service` (port 3485, Kanban app via standalone `kanban`)
    - Deploy via SCP, move to `/etc/systemd/system/`, `daemon-reload`
 7. **Configure Firewall**: Open ports 3484/3485 (firewalld + iptables fallback)
 8. **Enable & Start Services**: `systemctl enable/start` both services
