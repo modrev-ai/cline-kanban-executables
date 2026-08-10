@@ -78,6 +78,8 @@ jobs:
 
       - name: Deploy all files via SCP (single transfer)
         run: |
+          # Ensure the deploy directory exists (previously done by the auth-setup job).
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "mkdir -p ${{ env.DEPLOY_PATH }}/prod_executable"
           scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts -r deploy-staging/prod_executable "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
           scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts deploy-staging/start-all.bat deploy-staging/start-all.ps1 deploy-staging/start-all-with-tailscale.bat deploy-staging/start-all-with-tailscale.ps1 deploy-staging/README.md "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}:${{ env.DEPLOY_PATH }}/"
           ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${{ env.ORACLE_USER }}@${{ env.ORACLE_HOST }}" "chmod +x ${{ env.DEPLOY_PATH }}/prod_executable/cline-remote-launch.sh"

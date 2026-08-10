@@ -21,14 +21,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install PyYAML
-        run: pip install pyyaml
-
+      # python3 + PyYAML are preinstalled on the GitHub-hosted ubuntu runner,
+      # so no setup-python / pip install step is needed.
       - name: Find YAML files
         id: yaml-files
         run: |
