@@ -200,10 +200,30 @@ After successful deployment, always use **port 3484** (the proxy):
 > **not reachable** from the public IP by design — the proxy on 3484 rewrites the `Host`/`Origin`
 > headers so Cline's host check accepts the request. Only 3484 is exposed externally.
 >
-> If `http://<oracle-ip>:3484` is unreachable even though the deploy succeeded, the OCI **VCN
-> Security List** (or the instance's **Network Security Group**) is almost certainly missing an
-> ingress rule. Add one for **TCP 3484**, Source CIDR `0.0.0.0/0`. This is a cloud-network setting
-> in the OCI Console and cannot be configured from inside the instance or by this workflow.
+> **Cloud-network ingress (port 3484):** The deploy automatically opens ingress for TCP 3484 on
+> the subnet's **OCI VCN Security List** during the infrastructure step (`deploy-infra.sh`), using
+> the OCI CLI with **instance-principal** auth — no API keys or secrets are stored. For this to
+> work you must grant the instance permission once (see below). If it's not granted, the deploy
+> still succeeds and the app runs on the instance; only the automatic ingress is skipped (the
+> health check will warn), and you can add the rule manually in the OCI Console.
+
+#### One-time IAM setup for automatic ingress
+
+So the instance can open its own VCN ingress, create a Dynamic Group and a Policy in the OCI Console:
+
+1. **Identity & Security → Dynamic Groups → Create**, with a matching rule such as:
+   ```
+   ANY {instance.compartment.id = '<compartment-ocid-of-the-instance>'}
+   ```
+   (or pin to the exact instance: `ANY {instance.id = '<instance-ocid>'}`)
+2. **Identity & Security → Policies → Create** in that compartment:
+   ```
+   Allow dynamic-group <dynamic-group-name> to manage virtual-network-family in compartment <compartment-name>
+   ```
+
+With that in place, every deploy ensures the TCP 3484 ingress rule exists (idempotent). To do it
+manually instead, add an ingress rule to the subnet's Security List (or the instance's NSG):
+**Stateless No · Source CIDR `0.0.0.0/0` · TCP · Destination Port `3484`**.
 
 ### Manual Service Management
 

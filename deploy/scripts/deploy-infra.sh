@@ -362,6 +362,140 @@ echo "=== Saving iptables rules ==="
 sudo mkdir -p /etc/iptables
 sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true
 
+# ============================================================================
+# Open OCI cloud-network ingress for the public proxy port (3484)
+# ----------------------------------------------------------------------------
+# The instance firewall (above) is NOT enough: OCI instances also sit behind a
+# VCN Security List / NSG, and by default only port 22 is open. Without an
+# ingress rule for 3484 the app is unreachable from the internet even though
+# the proxy is healthy. We add that rule here using the OCI CLI with
+# *instance-principal* auth (the instance authenticates as itself via IMDS -
+# no API keys or secrets are stored anywhere).
+#
+# One-time IAM setup required in your tenancy for this to work (see README):
+#   1. Dynamic Group matching this instance, e.g. rule:
+#        ANY {instance.compartment.id = '<this-instance-compartment-ocid>'}
+#   2. Policy in that compartment:
+#        Allow dynamic-group <dg-name> to manage virtual-network-family in compartment <name>
+#
+# This step is best-effort and NEVER fails the deploy: if the CLI is missing or
+# IAM is not set up, it prints instructions and continues (the app still works
+# on the instance; only external access needs the rule).
+# ============================================================================
+OCI_INGRESS_PORT=3484
+echo "=== Opening OCI VCN ingress for TCP ${OCI_INGRESS_PORT} (instance principal) ==="
+set +e  # never abort the deploy because of cloud-network automation
+(
+  IMDS="http://169.254.169.254/opc/v2"
+  imds() { curl -s -H "Authorization: Bearer Oracle" --max-time 10 "$1"; }
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "WARNING: python3 not found - skipping OCI ingress automation."
+    exit 0
+  fi
+
+  # Ensure the OCI CLI is available (Oracle Linux platform images usually ship it).
+  if ! command -v oci >/dev/null 2>&1; then
+    echo "OCI CLI not found - attempting a quick install..."
+    curl -fsSL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh -o /tmp/oci-install.sh 2>/dev/null \
+      && sudo bash /tmp/oci-install.sh --accept-all-defaults --install-dir /opt/oci-cli --exec-dir /usr/local/bin --script-dir /opt/oci-cli/bin >/dev/null 2>&1 \
+      || echo "WARNING: OCI CLI install failed."
+  fi
+  OCI="$(command -v oci || echo /usr/local/bin/oci)"
+  if ! "$OCI" --version >/dev/null 2>&1; then
+    echo "WARNING: OCI CLI unavailable. Add a TCP ${OCI_INGRESS_PORT} ingress rule in the OCI Console manually."
+    exit 0
+  fi
+
+  export OCI_CLI_AUTH=instance_principal
+
+  # Discover this instance's primary VNIC -> subnet -> security list via IMDS + CLI.
+  VNIC_ID=$(imds "$IMDS/vnics/" | python3 -c "import sys,json;print(json.load(sys.stdin)[0]['vnicId'])" 2>/dev/null)
+  if [ -z "$VNIC_ID" ]; then echo "WARNING: could not read VNIC id from instance metadata."; exit 0; fi
+
+  SUBNET_ID=$("$OCI" network vnic get --vnic-id "$VNIC_ID" --query 'data."subnet-id"' --raw-output 2>/dev/null)
+  if [ -z "$SUBNET_ID" ]; then
+    echo "WARNING: OCI CLI could not read the subnet (likely missing IAM permissions)."
+    echo "         Set up the dynamic group + policy described above, or add the rule manually."
+    exit 0
+  fi
+
+  SL_ID=$("$OCI" network subnet get --subnet-id "$SUBNET_ID" --query 'data."security-list-ids"[0]' --raw-output 2>/dev/null)
+  if [ -z "$SL_ID" ]; then echo "WARNING: could not resolve the subnet's security list."; exit 0; fi
+  echo "Target security list: $SL_ID"
+
+  # Fetch current ingress rules (kebab-case JSON from the CLI).
+  CUR=$("$OCI" network security-list get --security-list-id "$SL_ID" --query 'data."ingress-security-rules"' --output json 2>/dev/null)
+  if [ -z "$CUR" ]; then echo "WARNING: could not read current ingress rules."; exit 0; fi
+
+  # Decide whether 3484 is already open, and if not, emit the updated rule set
+  # (converted to the camelCase model the update command expects).
+  RULES_FILE=/tmp/oci-ingress-rules.json
+  ADD_NEEDED=$(printf '%s' "$CUR" | PORT="$OCI_INGRESS_PORT" OUT="$RULES_FILE" python3 - <<'PY'
+import sys, json, os
+port = int(os.environ["PORT"])
+rules = json.load(sys.stdin) or []
+
+def to_camel(s):
+    a = s.split('-')
+    return a[0] + ''.join(w[:1].upper() + w[1:] for w in a[1:])
+
+def conv(o):
+    if isinstance(o, dict):
+        return {to_camel(k): conv(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [conv(x) for x in o]
+    return o
+
+crules = conv(rules)
+
+def covers(r):
+    if r.get("source") != "0.0.0.0/0":
+        return False
+    proto = str(r.get("protocol"))
+    if proto == "all":
+        return True
+    if proto != "6":  # 6 = TCP
+        return False
+    tcp = r.get("tcpOptions") or {}
+    dpr = tcp.get("destinationPortRange")
+    if not dpr:            # no port range == all TCP ports
+        return True
+    return dpr.get("min", 1) <= port <= dpr.get("max", 65535)
+
+if any(covers(r) for r in crules):
+    print("no")
+else:
+    crules.append({
+        "source": "0.0.0.0/0",
+        "sourceType": "CIDR_BLOCK",
+        "protocol": "6",
+        "isStateless": False,
+        "tcpOptions": {"destinationPortRange": {"min": port, "max": port}},
+    })
+    with open(os.environ["OUT"], "w") as f:
+        json.dump(crules, f)
+    print("yes")
+PY
+)
+
+  if [ "$ADD_NEEDED" = "no" ]; then
+    echo "[OK] OCI ingress for TCP ${OCI_INGRESS_PORT} already present - nothing to do."
+    exit 0
+  elif [ "$ADD_NEEDED" = "yes" ]; then
+    if "$OCI" network security-list update --security-list-id "$SL_ID" \
+         --ingress-security-rules "file://${RULES_FILE}" --force >/dev/null 2>&1; then
+      echo "[OK] Added OCI ingress rule for TCP ${OCI_INGRESS_PORT} (source 0.0.0.0/0)."
+    else
+      echo "WARNING: failed to update the security list (likely missing 'manage virtual-network-family' permission)."
+      echo "         Add the rule manually or grant the policy described above."
+    fi
+  else
+    echo "WARNING: could not evaluate current ingress rules; skipping."
+  fi
+)
+set -e
+
 echo "=== Creating systemd service files ==="
 echo "=== Creating kanban-proxy service ==="
 sudo tee /etc/systemd/system/kanban-proxy.service > /dev/null << SVC_EOF
