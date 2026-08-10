@@ -53,27 +53,16 @@ jobs:
 
       - name: Check service status on Oracle
         run: |
-          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" bash << 'ENDSSH'
-            echo "=== kanban-proxy status ==="
-            systemctl status kanban-proxy --no-pager -l
-            echo
-            echo "=== kanban-server status ==="
-            systemctl status kanban-server --no-pager -l
-            echo
-            echo "=== Port status ==="
-            ss -tlnp | grep -E ":3484|:3485" || echo "No services on 3484/3485 yet"
-            echo
-            echo "=== Tailscale status ==="
-            tailscale status 2>/dev/null || echo "Tailscale not running"
-          ENDSSH
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" \
+            'echo "=== kanban-proxy status ==="; systemctl status kanban-proxy --no-pager -l; echo; echo "=== kanban-server status ==="; systemctl status kanban-server --no-pager -l; echo; echo "=== Port status ==="; ss -tlnp | grep -E ":3484|:3485" || echo "No services on 3484/3485 yet"; echo; echo "=== Tailscale status ==="; tailscale status 2>/dev/null || echo "Tailscale not running"'
 
       - name: Verify deployment with HTTP health checks (via SSH on Oracle)
         run: |
           # Run curl directly on the Oracle instance via SSH to bypass Oracle Cloud
           # Security Group restrictions on port 3484. The kanban-server (cline kanban)
           # binds to 127.0.0.1:3485 (localhost only) and takes ~90s to init its HTTP
-          # endpoint. The proxy on 3484 forwards to 3485 - a 200 from the proxy
-          # confirms both services are healthy end-to-end.
+          # endpoint. The proxy on 3484 now returns 502 when backend is down (rather
+          # than hanging), so curl returns quickly with a non-200 code until ready.
           maxRetries=18
           retryDelay=20
 
@@ -85,12 +74,14 @@ jobs:
           for i in $(seq 1 $maxRetries); do
             echo "Attempt $i of $maxRetries..."
 
-            # Run curl on the Oracle instance itself (bypasses external firewall)
+            # Run curl on the Oracle instance itself (bypasses external firewall).
+            # curl -w "%{http_code}" already outputs "000" on connection errors,
+            # so no fallback echo needed (that caused "000000" doubling before).
             response=$(ssh -i ~/.ssh/oracle_key \
               -o UserKnownHostsFile=~/.ssh/known_hosts \
               -o ConnectTimeout=10 \
               "${ORACLE_USER}@${ORACLE_HOST}" \
-              'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 15 2>/dev/null || echo "000"')
+              'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3484 --max-time 15 2>/dev/null; true')
 
             echo "  Proxy (port 3484) HTTP response: $response"
 
@@ -100,6 +91,8 @@ jobs:
               break
             elif [ "$response" = "000" ]; then
               echo "[INFO] Proxy connection timed out - backend may still be initializing"
+            elif [ "$response" = "502" ]; then
+              echo "[INFO] Proxy returned 502 - backend not yet ready on port 3485"
             else
               echo "[INFO] Proxy returned HTTP $response - may still be initializing"
             fi
@@ -115,14 +108,8 @@ jobs:
             echo "FAILED: Kanban Proxy (port 3484) did not respond with HTTP 200 after $maxRetries attempts" >&2
             echo ""
             echo "=== Final diagnostics ==="
-            ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" bash << 'ENDSSH' || true
-              echo "--- Port bindings ---"
-              ss -tlnp | grep -E "3484|3485" || echo "No bindings on 3484/3485"
-              echo "--- kanban-proxy logs ---"
-              journalctl -u kanban-proxy --no-pager -l -n 30
-              echo "--- kanban-server logs ---"
-              journalctl -u kanban-server --no-pager -l -n 30
-            ENDSSH
+            ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts "${ORACLE_USER}@${ORACLE_HOST}" \
+              'echo "--- Port bindings ---"; ss -tlnp | grep -E "3484|3485" || echo "No bindings on 3484/3485"; echo "--- kanban-proxy logs ---"; journalctl -u kanban-proxy --no-pager -l -n 30; echo "--- kanban-server logs ---"; journalctl -u kanban-server --no-pager -l -n 30' || true
             exit 1
           fi
 

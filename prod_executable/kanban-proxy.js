@@ -57,8 +57,18 @@ proxy.on('proxyReqWs', (proxyReq, req, socket, options, head) => {
     proxyReq.setHeader('origin', `http://${TARGET_HOST}:${TARGET_PORT}`);
 });
 
-proxy.on('error', (err) => {
+// Return 502 immediately when backend is unavailable so health checks fail fast
+// instead of hanging until the client times out.
+proxy.on('error', (err, req, res) => {
     console.error('[PROXY ERROR]', err.message);
+    // res is an http.ServerResponse for HTTP requests, or a net.Socket for WebSocket
+    // upgrades. Only send an HTTP response for the former.
+    if (res && typeof res.writeHead === 'function' && !res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'text/plain' });
+        res.end('502 Bad Gateway: Backend service unavailable\n');
+    } else if (res && typeof res.destroy === 'function') {
+        res.destroy();
+    }
 });
 
 server.listen(PROXY_PORT, PROXY_HOST, () => {
