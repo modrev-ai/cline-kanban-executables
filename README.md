@@ -200,29 +200,34 @@ After successful deployment, always use **port 3484** (the proxy):
 > **not reachable** from the public IP by design — the proxy on 3484 rewrites the `Host`/`Origin`
 > headers so Cline's host check accepts the request. Only 3484 is exposed externally.
 >
-> **Cloud-network ingress (port 3484):** The deploy automatically opens ingress for TCP 3484 on
-> the subnet's **OCI VCN Security List** during the infrastructure step (`deploy-infra.sh`), using
-> the OCI CLI with **instance-principal** auth — no API keys or secrets are stored. For this to
-> work you must grant the instance permission once (see below). If it's not granted, the deploy
-> still succeeds and the app runs on the instance; only the automatic ingress is skipped (the
-> health check will warn), and you can add the rule manually in the OCI Console.
+> **Cloud-network ingress (port 3484):** OCI instances sit behind a VCN **Security List / NSG**,
+> and by default only port 22 is open — so even when the proxy is healthy the app is unreachable
+> from the internet until TCP 3484 ingress is opened. The deploy no longer tries to open this from
+> inside the instance (the old approach installed the OCI CLI on the box and used instance-principal
+> auth, which required a brittle tenancy-level dynamic-group + policy). Instead, open the ingress
+> **once from your own workstation** using your already-configured local OCI CLI — you already have
+> the permission in the OCI Console, so your local CLI does too.
 
-#### One-time IAM setup for automatic ingress
+#### Enabling ingress from your workstation
 
-So the instance can open its own VCN ingress, create a Dynamic Group and a Policy in the OCI Console:
+Prerequisite: install the OCI CLI and run `oci setup config` once
+(<https://docs.oracle.com/en-us/iaas/Content/API/SDKDocs/cliinstall.htm>). Then run the helper
+script, pointing it at your instance (it resolves the VNIC → subnet → security list for you):
 
-1. **Identity & Security → Dynamic Groups → Create**, with a matching rule such as:
-   ```
-   ANY {instance.compartment.id = '<compartment-ocid-of-the-instance>'}
-   ```
-   (or pin to the exact instance: `ANY {instance.id = '<instance-ocid>'}`)
-2. **Identity & Security → Policies → Create** in that compartment:
-   ```
-   Allow dynamic-group <dynamic-group-name> to manage virtual-network-family in compartment <compartment-name>
-   ```
+- **Windows (PowerShell):**
+  ```powershell
+  ./deploy/enable-oci-ingress.ps1 -InstanceId ocid1.instance.oc1..aaaa
+  ```
+- **macOS / Linux / WSL (bash):**
+  ```bash
+  ./deploy/scripts/enable-oci-ingress.sh --instance-id ocid1.instance.oc1..aaaa
+  ```
 
-With that in place, every deploy ensures the TCP 3484 ingress rule exists (idempotent). To do it
-manually instead, add an ingress rule to the subnet's Security List (or the instance's NSG):
+You can target `--subnet-id` / `-SubnetId` or `--security-list-id` / `-SecurityListId` instead, and
+override `--port` / `-Port` (default 3484), `--source` / `-Source` (default `0.0.0.0/0`), and
+`--profile` / `-Profile`. The script is idempotent — it's a no-op if the port is already open.
+
+To do it manually instead, add an ingress rule to the subnet's Security List (or the instance's NSG):
 **Stateless No · Source CIDR `0.0.0.0/0` · TCP · Destination Port `3484`**.
 
 ### Manual Service Management
