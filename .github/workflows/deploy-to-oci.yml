@@ -98,10 +98,12 @@ jobs:
             ls -la "${{ env.DEPLOY_PATH }}/prod_executable/kanban-proxy.js" 2>/dev/null || echo "WARNING: kanban-proxy.js not found!"
             which cline 2>/dev/null || echo "WARNING: cline not in PATH!"
             cline --version 2>/dev/null || echo "WARNING: cline version check failed!"
+            which kanban 2>/dev/null || echo "WARNING: kanban not in PATH!"
+            kanban --version 2>/dev/null || echo "WARNING: kanban version check failed!"
             
             # Fix SELinux context on node binary (files moved from /tmp retain tmp_t context)
             sudo restorecon -Rv /usr/local/lib/nodejs/ 2>/dev/null || true
-            sudo restorecon -v /usr/bin/node /usr/bin/npm /usr/bin/npx /usr/bin/cline 2>/dev/null || true
+            sudo restorecon -v /usr/bin/node /usr/bin/npm /usr/bin/npx /usr/bin/cline /usr/bin/kanban 2>/dev/null || true
             
             # Fix SELinux context on service files
             sudo restorecon -v /etc/systemd/system/kanban-proxy.service /etc/systemd/system/kanban-server.service 2>/dev/null || true
@@ -165,7 +167,7 @@ jobs:
             ss -tlnp | grep -E "3484|3485" || echo "No services listening on 3484/3485"
             
             # Wait for services to be systemd-active only (HTTP readiness done by health-check.yml)
-            # cline kanban takes ~90s to initialize its HTTP endpoint - don't check HTTP here
+            # kanban takes ~90s to initialize its HTTP endpoint - don't check HTTP here
             echo "=== Verifying services are systemd-active ==="
             maxRetries=12
             retryDelay=5
