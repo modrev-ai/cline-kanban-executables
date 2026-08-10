@@ -118,7 +118,17 @@ jobs:
             sudo sed -i 's|WorkingDirectory=.*/prod_executable|WorkingDirectory=/usr/local/lib/kanban|g' /etc/systemd/system/kanban-proxy.service
             echo "=== Updated kanban-proxy.service ==="
             cat /etc/systemd/system/kanban-proxy.service
-            
+
+            # Fix SELinux policy: allow proxy to connect to kanban-server on port 3485.
+            # Without this the proxy gets EACCES (not ECONNREFUSED) on loopback connections.
+            # Label port 3485 as http_port_t and enable httpd network connect boolean.
+            echo "=== Configuring SELinux for inter-service connectivity ==="
+            sudo semanage port -a -t http_port_t -p tcp 3485 2>/dev/null || \
+              sudo semanage port -m -t http_port_t -p tcp 3485 2>/dev/null || \
+              echo "semanage port already configured or unavailable"
+            sudo setsebool -P httpd_can_network_connect 1 2>/dev/null || echo "setsebool unavailable"
+            echo "SELinux port policy applied"
+
             sudo systemctl daemon-reload
             
             # Check if services exist (use direct file check, more reliable than systemctl list-unit-files)
