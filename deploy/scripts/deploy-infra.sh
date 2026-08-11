@@ -284,8 +284,9 @@ echo "=== Installing kanban from modrev-ai/kanban (latest release) ==="
 # modrev-ai/kanban does NOT commit dist/ (it is gitignored and built by the
 # release pipeline), so a raw source tarball has no dist/cli.js and installs a
 # broken `kanban` bin. Each modrev-ai/kanban GitHub release publishes the built
-# package to npm, so we resolve the newest release tag from that repo and install
-# that exact version from the registry.
+# package to npm under the SCOPED name @modrev-ai/kanban (the unscoped `kanban`
+# on npm is an unrelated third-party package that stops at 0.1.70), so we resolve
+# the newest release tag from that repo and install that exact scoped version.
 #
 # Resolve the most recent release tag (releases API returns newest first).
 KANBAN_LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/releases" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' | head -1 || echo "")
@@ -312,8 +313,8 @@ fi
 
 if [ "$INSTALLED_KANBAN_VERSION" != "$KANBAN_TARGET_VERSION" ]; then
   echo "Installing/updating kanban to $KANBAN_TARGET_VERSION from modrev-ai/kanban release..."
-  if ! sudo -u "${ORACLE_USER}" bash -c "npm install -g kanban@${KANBAN_TARGET_VERSION} --omit=optional --maxsockets=1" 2>&1; then
-    echo "ERROR: Failed to install kanban@${KANBAN_TARGET_VERSION}" >&2
+  if ! sudo -u "${ORACLE_USER}" bash -c "npm install -g @modrev-ai/kanban@${KANBAN_TARGET_VERSION} --omit=optional --maxsockets=1" 2>&1; then
+    echo "ERROR: Failed to install @modrev-ai/kanban@${KANBAN_TARGET_VERSION}" >&2
     exit 1
   fi
   echo "kanban install completed successfully"
@@ -343,8 +344,8 @@ if [ -f "/home/${ORACLE_USER}/.npm-global/bin/kanban" ]; then
 else
   # Fall back to the npm global root reported for the oracle user
   NPM_GLOBAL_ROOT_KANBAN=$(timeout 10 sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null || echo "")
-  if [ -n "$NPM_GLOBAL_ROOT_KANBAN" ] && [ -f "${NPM_GLOBAL_ROOT_KANBAN}/kanban/dist/cli.js" ]; then
-    KANBAN_BIN_PATH="${NPM_GLOBAL_ROOT_KANBAN}/kanban/dist/cli.js"
+  if [ -n "$NPM_GLOBAL_ROOT_KANBAN" ] && [ -f "${NPM_GLOBAL_ROOT_KANBAN}/@modrev-ai/kanban/dist/cli.js" ]; then
+    KANBAN_BIN_PATH="${NPM_GLOBAL_ROOT_KANBAN}/@modrev-ai/kanban/dist/cli.js"
   fi
 fi
 if [ -n "$KANBAN_BIN_PATH" ] && [ -f "$KANBAN_BIN_PATH" ]; then
@@ -353,7 +354,7 @@ if [ -n "$KANBAN_BIN_PATH" ] && [ -f "$KANBAN_BIN_PATH" ]; then
 else
   echo "ERROR: Could not find kanban binary after install" >&2
   sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/bin/ 2>/dev/null' || true
-  sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/lib/node_modules/kanban/ 2>/dev/null' || true
+  sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/lib/node_modules/@modrev-ai/kanban/ 2>/dev/null' || true
   exit 1
 fi
 
