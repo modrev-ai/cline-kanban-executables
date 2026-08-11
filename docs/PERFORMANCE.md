@@ -38,14 +38,27 @@ The public entrypoint is the proxy, so every user request paid this. Removed.
 ### 2. No compression (fixed)
 
 Upstream served everything uncompressed even when the client sent
-`Accept-Encoding: gzip`. The proxy now gzips compressible types:
+`Accept-Encoding: gzip`. The proxy now gzips compressible types.
 
-| Asset | Raw | gzip -6 | Saved |
-|---|---|---|---|
-| `index-*.js` | 2,171,360 B | 571,610 B | 74% |
-| `xterm-vendor-*.js` | 620,728 B | 142,073 B | 77% |
+Compression level matters a lot here. Measured on the box against the 2.17 MB
+bundle:
 
-Those two assets alone drop from **2.79 MB to 713 KB**.
+| Level | Time | Output |
+|---|---|---|
+| 1 | 303 ms | 703,595 B |
+| 2 | 311 ms | 672,756 B |
+| 4 | 394 ms | 607,925 B |
+| 6 | 788 ms | 571,620 B |
+
+The proxy uses **level 1**. Level 6's extra 23% of savings costs 2.6x the CPU,
+which is a bad trade on one burstable OCPU where the proxy is single-threaded
+and blocks other requests while compressing. Overridable via
+`PROXY_GZIP_LEVEL`.
+
+Compressed output for immutable hashed assets is cached in memory (8 MB cap,
+`PROXY_CACHE_BYTES`), so each bundle is compressed once rather than once per
+visitor. Cached entries can never go stale because the filename changes on
+rebuild.
 
 ### 3. `Cache-Control: no-store` on immutable assets (fixed)
 
@@ -67,6 +80,21 @@ which makes cline GC-thrash. `deploy-infra.sh` now sets
 Serialized every npm download; installing 3 packages took 3 minutes. Raised to 8.
 This affects deploy time, not runtime.
 
+## Result on the live box
+
+Fetching the 2.17 MB bundle through the proxy on `:3484`:
+
+| | Before | After |
+|---|---|---|
+| First request | 1.494 s / 2,171,360 B | 1.714 s / 682,408 B |
+| Repeat request | 1.494 s / 2,171,360 B | **0.002 s** / 682,408 B (cached) |
+| Repeat page load | full re-download (`no-store`) | browser cache, no request |
+| Whole cold page | ~2.8 MB | **856 KB** |
+
+The first request after a proxy restart is slightly slower than before because
+it pays the one-time compression; every request after it is ~850x faster, and
+browsers no longer re-fetch at all. Proxy RSS is 31.9 MB with the cache warm.
+
 ## Verification
 
 The proxy rewrite was tested against a stub upstream before deployment:
@@ -77,7 +105,13 @@ The proxy rewrite was tested against a stub upstream before deployment:
 - **SSE is never compressed or buffered** — first byte at 3 ms of a 166 ms stream
 - HTML shell keeps `no-store`; non-hashed images get neither cache nor gzip
 - 304 responses gain no `Content-Encoding`
+- a non-gzip client still gets raw bytes after the gzip cache is populated
 - **WebSocket upgrade still works**, with Host/Origin rewriting intact
+
+After deployment, the same checks were re-run against the live instance, plus a
+real upgrade to the app's actual socket endpoint (`/api/runtime/ws`), which
+returns `101 Switching Protocols` through the proxy with a `Sec-WebSocket-Accept`
+matching the direct-to-server response.
 
 ## Scaling up (free)
 

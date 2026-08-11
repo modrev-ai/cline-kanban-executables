@@ -43,6 +43,37 @@ const proxy = httpProxy.createProxyServer({
 const HASHED_ASSET = /^\/assets\/.+-[A-Za-z0-9_-]{8,}\.(?:js|css|woff2?|ttf|otf|svg|png|jpe?g|webp|avif)$/;
 const COMPRESSIBLE = /^(?:text\/|application\/(?:javascript|json|xml|wasm|manifest)|image\/svg)/i;
 
+// Compression level 1, not the usual 6. Measured on the E2.1.Micro this runs on,
+// against the 2.17 MB app bundle:
+//   level 1 -> 703 KB in 303 ms      level 6 -> 571 KB in 788 ms
+// The extra 23% of savings is not worth 2.6x the CPU on a box with 1 burstable
+// OCPU, where the proxy is single-threaded and blocks other requests while it
+// compresses. Override with PROXY_GZIP_LEVEL if the host gets bigger.
+const GZIP_LEVEL = parseInt(process.env.PROXY_GZIP_LEVEL || '1', 10);
+
+// 64 KB chunks instead of zlib's 16 KB default: fewer passes through the stream
+// machinery, which dominated the cost on this CPU.
+const GZIP_CHUNK = 64 * 1024;
+
+// Compressing the same immutable bundle for every visitor is pure waste, so keep
+// the gzipped bytes. Only content-hashed assets are cached -- their filenames
+// change on rebuild, so entries can never go stale. Bounded because this box has
+// ~19 MB of free RAM; oldest entries are evicted first.
+const CACHE_MAX_BYTES = parseInt(process.env.PROXY_CACHE_BYTES || String(8 * 1024 * 1024), 10);
+const gzipCache = new Map();
+let gzipCacheBytes = 0;
+
+function cachePut(key, body, headers) {
+    if (body.length > CACHE_MAX_BYTES) return;
+    while (gzipCacheBytes + body.length > CACHE_MAX_BYTES && gzipCache.size > 0) {
+        const oldest = gzipCache.keys().next().value;
+        gzipCacheBytes -= gzipCache.get(oldest).body.length;
+        gzipCache.delete(oldest);
+    }
+    gzipCache.set(key, { body, headers });
+    gzipCacheBytes += body.length;
+}
+
 proxy.on('proxyRes', (proxyRes, req, res) => {
     const headers = Object.assign({}, proxyRes.headers);
     const contentType = headers['content-type'] || '';
@@ -78,15 +109,40 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
 
     res.writeHead(proxyRes.statusCode, headers);
 
-    const gzip = zlib.createGzip({ level: 6 });
+    const gzip = zlib.createGzip({ level: GZIP_LEVEL, chunkSize: GZIP_CHUNK });
     gzip.on('error', (err) => {
         console.error('[GZIP ERROR]', err.message);
         res.destroy();
     });
+
+    // Tee immutable assets into the cache as they stream to this first client.
+    if (HASHED_ASSET.test(pathname)) {
+        const chunks = [];
+        let aborted = false;
+        gzip.on('data', (c) => chunks.push(c));
+        proxyRes.on('aborted', () => { aborted = true; });
+        gzip.on('end', () => {
+            if (!aborted) cachePut(pathname, Buffer.concat(chunks), headers);
+        });
+    }
+
     proxyRes.pipe(gzip).pipe(res);
 });
 
 const server = http.createServer((req, res) => {
+    const pathname = (req.url || '').split('?')[0];
+
+    // Serve an already-compressed immutable asset without touching upstream or
+    // spending any CPU on zlib.
+    if (req.method === 'GET' && /\bgzip\b/i.test(req.headers['accept-encoding'] || '')) {
+        const hit = gzipCache.get(pathname);
+        if (hit) {
+            res.writeHead(200, hit.headers);
+            res.end(hit.body);
+            return;
+        }
+    }
+
     // Rewrite Host and Origin headers to match what Kanban expects
     req.headers['host'] = `${TARGET_HOST}:${TARGET_PORT}`;
     req.headers['origin'] = `http://${TARGET_HOST}:${TARGET_PORT}`;
