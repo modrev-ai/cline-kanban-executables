@@ -320,10 +320,16 @@ if [ "$INSTALLED_KANBAN_VERSION" != "$KANBAN_TARGET_VERSION" ]; then
   # @modrev-ai/kanban install with `EEXIST: file already exists ...bin/kanban`.
   # Remove the stale package and any leftover bin symlink first. Both are no-ops
   # on a clean machine, so this stays idempotent.
-  echo "Removing any pre-existing unscoped kanban to avoid bin collision..."
+  echo "Removing any pre-existing unscoped kanban to avoid file collisions..."
   sudo -u "${ORACLE_USER}" bash -c 'npm uninstall -g kanban >/dev/null 2>&1 || true'
-  sudo -u "${ORACLE_USER}" bash -c 'rm -f ~/.npm-global/bin/kanban' || true
-  if ! sudo -u "${ORACLE_USER}" bash -c "npm install -g @modrev-ai/kanban@${KANBAN_TARGET_VERSION} --omit=optional --maxsockets=1" 2>&1; then
+  # Drop leftover bin/man symlinks the stale unscoped package (or a previously
+  # interrupted install) left behind. npm aborts the scoped install with EEXIST
+  # when it finds either the `kanban` bin or the `kanban.1` man page already there.
+  sudo -u "${ORACLE_USER}" bash -c 'rm -f ~/.npm-global/bin/kanban ~/.npm-global/share/man/man1/kanban.1' || true
+  # --force so npm overwrites any remaining conflicting files rather than aborting
+  # with EEXIST. Safe here: this is a single-user dev box and replacing the
+  # unrelated stale kanban's artifacts is exactly the intent.
+  if ! sudo -u "${ORACLE_USER}" bash -c "npm install -g @modrev-ai/kanban@${KANBAN_TARGET_VERSION} --omit=optional --maxsockets=1 --force" 2>&1; then
     echo "ERROR: Failed to install @modrev-ai/kanban@${KANBAN_TARGET_VERSION}" >&2
     exit 1
   fi
