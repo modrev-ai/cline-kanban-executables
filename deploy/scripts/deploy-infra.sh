@@ -313,6 +313,16 @@ fi
 
 if [ "$INSTALLED_KANBAN_VERSION" != "$KANBAN_TARGET_VERSION" ]; then
   echo "Installing/updating kanban to $KANBAN_TARGET_VERSION from modrev-ai/kanban release..."
+  # Clear anything that would collide on the global `kanban` bin before installing.
+  # Older deploys installed the unrelated UNSCOPED `kanban` package (which owns
+  # ~/.npm-global/bin/kanban -> .../node_modules/kanban/dist/cli.js). npm refuses
+  # to overwrite a bin owned by a different package and aborts the scoped
+  # @modrev-ai/kanban install with `EEXIST: file already exists ...bin/kanban`.
+  # Remove the stale package and any leftover bin symlink first. Both are no-ops
+  # on a clean machine, so this stays idempotent.
+  echo "Removing any pre-existing unscoped kanban to avoid bin collision..."
+  sudo -u "${ORACLE_USER}" bash -c 'npm uninstall -g kanban >/dev/null 2>&1 || true'
+  sudo -u "${ORACLE_USER}" bash -c 'rm -f ~/.npm-global/bin/kanban' || true
   if ! sudo -u "${ORACLE_USER}" bash -c "npm install -g @modrev-ai/kanban@${KANBAN_TARGET_VERSION} --omit=optional --maxsockets=1" 2>&1; then
     echo "ERROR: Failed to install @modrev-ai/kanban@${KANBAN_TARGET_VERSION}" >&2
     exit 1
