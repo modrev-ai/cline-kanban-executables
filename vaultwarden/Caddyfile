@@ -1,0 +1,24 @@
+# Automatic Let's Encrypt TLS for {$VW_DOMAIN}. WebSocket (/notifications/hub)
+# is forwarded transparently by reverse_proxy — current Vaultwarden serves it on
+# the same port 80 as the web vault.
+{$VW_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	reverse_proxy vaultwarden:80 {
+		header_up X-Real-IP {remote_host}
+	}
+
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}

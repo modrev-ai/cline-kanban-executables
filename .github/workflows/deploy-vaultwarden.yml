@@ -1,0 +1,118 @@
+name: Deploy Vaultwarden to Oracle
+
+# Deploys the self-hosted Vaultwarden stack (vault + Caddy auto-HTTPS + optional
+# Google Drive backup sidecar) to the same Oracle box as the kanban stack,
+# reusing the existing SSH secrets. Trigger manually from the Actions tab.
+#
+# Reuses secrets: ORACLE_HOST, ORACLE_USER, ORACLE_SSH_KEY_B64
+# Backup needs (add these):  RCLONE_CONF_B64, VW_BACKUP_ZIP_PASSWORD
+#
+# Domain is derived automatically as vault.<host-ip-with-dashes>.nip.io — no DNS
+# setup required, and Caddy issues a real trusted Let's Encrypt certificate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      signups_allowed:
+        description: "Allow account registration (set true for the FIRST deploy, then re-run as false to lock down)"
+        type: boolean
+        default: true
+      enable_backup:
+        description: "Enable the Google Drive backup sidecar (needs RCLONE_CONF_B64 + VW_BACKUP_ZIP_PASSWORD secrets)"
+        type: boolean
+        default: true
+
+jobs:
+  deploy:
+    name: Deploy Vaultwarden
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          key="${{ secrets.ORACLE_SSH_KEY_B64 }}"
+          key=$(echo "$key" | tr -d '[:space:]')
+          echo "$key" | base64 -d > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          ssh-keyscan -H -T 10 "$ORACLE_HOST" >> ~/.ssh/known_hosts 2>/dev/null || echo "ssh-keyscan failed; using StrictHostKeyChecking=no"
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Test SSH connection
+        run: |
+          ssh -i ~/.ssh/oracle_key -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            "$ORACLE_USER@$ORACLE_HOST" "echo 'SSH connection successful'"
+
+      - name: Stage stack + generate .env
+        env:
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+          BACKUP_ZIP_PASSWORD: ${{ secrets.VW_BACKUP_ZIP_PASSWORD }}
+          SIGNUPS_ALLOWED: ${{ inputs.signups_allowed }}
+          ENABLE_BACKUP: ${{ inputs.enable_backup }}
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          cp vaultwarden/docker-compose.yml vaultwarden/Caddyfile vaultwarden/bring-up.sh staging/
+
+          # Derive the nip.io domain from the host IP (1.2.3.4 -> vault.1-2-3-4.nip.io).
+          DOMAIN="vault.$(echo "$ORACLE_HOST" | tr '.' '-').nip.io"
+          echo "Deploying domain: $DOMAIN"
+
+          # Decode the rclone config (if provided) and parse the remote name from it.
+          RCLONE_REMOTE_NAME=""
+          if [ "$ENABLE_BACKUP" = "true" ] && [ -n "${RCLONE_CONF_B64:-}" ]; then
+            echo "$RCLONE_CONF_B64" | tr -d '[:space:]' | base64 -d > staging/rclone.conf
+            RCLONE_REMOTE_NAME=$(grep -m1 -E '^\[' staging/rclone.conf | tr -d '[]' || true)
+            echo "Parsed rclone remote name: ${RCLONE_REMOTE_NAME:-<none>}"
+          fi
+
+          # Generate .env. NOTE: no quotes — docker compose --env-file reads the
+          # whole value after '='; the cron value contains spaces intentionally.
+          cat > staging/.env <<EOF
+          VW_DOMAIN=$DOMAIN
+          SIGNUPS_ALLOWED=$SIGNUPS_ALLOWED
+          TZ=UTC
+          RCLONE_REMOTE_NAME=$RCLONE_REMOTE_NAME
+          RCLONE_REMOTE_DIR=VaultwardenBackup/
+          BACKUP_CRON=5 3 * * *
+          BACKUP_KEEP_DAYS=30
+          BACKUP_ZIP_PASSWORD=${BACKUP_ZIP_PASSWORD:-}
+          ENABLE_BACKUP=$ENABLE_BACKUP
+          EOF
+
+      - name: Copy stack to server
+        run: |
+          set -euo pipefail
+          REMOTE_DIR="/home/$ORACLE_USER/vaultwarden"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts \
+            "$ORACLE_USER@$ORACLE_HOST" "mkdir -p $REMOTE_DIR"
+          scp -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -r staging/. "$ORACLE_USER@$ORACLE_HOST:$REMOTE_DIR/"
+
+      - name: Bring up the stack
+        run: |
+          set -euo pipefail
+          REMOTE_DIR="/home/$ORACLE_USER/vaultwarden"
+          ssh -i ~/.ssh/oracle_key -o UserKnownHostsFile=~/.ssh/known_hosts \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            "chmod +x $REMOTE_DIR/bring-up.sh && REMOTE_DIR='$REMOTE_DIR' bash $REMOTE_DIR/bring-up.sh"
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          DOMAIN="vault.$(echo "$ORACLE_HOST" | tr '.' '-').nip.io"
+          {
+            echo "### Vaultwarden deployment"
+            echo ""
+            echo "- **URL:** https://$DOMAIN"
+            echo "- **Signups allowed:** ${{ inputs.signups_allowed }}"
+            echo "- **Backup enabled:** ${{ inputs.enable_backup }}"
+            echo ""
+            echo "If the vault isn't reachable, confirm the OCI VCN Security List allows inbound TCP 80 and 443."
+          } >> "$GITHUB_STEP_SUMMARY"
