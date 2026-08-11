@@ -6,15 +6,7 @@ narrative (with runbook and troubleshooting) see the Confluence page
 **cline-kanban-executables — Repository Guide**
 (<https://modrev.atlassian.net/wiki/spaces/PM/pages/360450>).
 
-## Diagram source (Lucid)
-
-The canonical, editable architecture diagram is maintained in Lucidchart:
-
-- **View:** <https://lucid.app/lucidchart/253bdc36-2e3b-4012-9519-9f91ee7fcc22/view>
-- **Edit:** <https://lucid.app/lucidchart/253bdc36-2e3b-4012-9519-9f91ee7fcc22/edit>
-
-The Mermaid diagrams below mirror it and render inline on GitHub; keep them in sync with the
-Lucid source when the topology changes.
+The diagrams below are authored in Mermaid and render inline on GitHub.
 
 ## System architecture
 
