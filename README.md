@@ -288,6 +288,7 @@ For detailed documentation, see the [`docs/`](docs/) folder:
 
 | Document | Description |
 |----------|-------------|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Runtime architecture (proxy/backend), with Mermaid diagrams |
 | [WORKFLOW.md](docs/WORKFLOW.md) | Complete CI/CD pipeline documentation |
 | [ORACLE_DEPLOYMENT.md](docs/ORACLE_DEPLOYMENT.md) | Oracle Cloud Free Tier deployment guide |
 | [ORACLE_DEPLOYMENT_COMPLETE.md](docs/ORACLE_DEPLOYMENT_COMPLETE.md) | Complete deployment notes |

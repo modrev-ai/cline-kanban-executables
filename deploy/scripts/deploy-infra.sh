@@ -46,34 +46,41 @@ else
 fi
 
 echo "=== [3/4] Installing Node.js 22 via binary download (fastest, no repo updates) ==="
-# Remove any existing nodejs to avoid conflicts (using direct binary removal, no dnf)
-sudo rm -f /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
-sudo rm -rf /usr/local/lib/nodejs 2>/dev/null || true
-sudo rm -rf /usr/lib/node_modules 2>/dev/null || true
-# Also remove any dnf-installed nodejs if present (but don't use dnf to do it)
-sudo rpm -e --nodeps nodejs npm 2>/dev/null || true
-
-# Download and install Node.js 22 binary directly (bypasses NodeSource repo entirely)
 NODE_VERSION="22.14.0"
 ARCH="x64"
-cd /tmp
-echo "Downloading Node.js ${NODE_VERSION} binary..."
-curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o node.tar.xz
-tar -xf node.tar.xz
-sudo rm -rf /usr/local/lib/nodejs
-sudo mkdir -p /usr/local/lib/nodejs
-sudo mv "node-v${NODE_VERSION}-linux-${ARCH}" /usr/local/lib/nodejs/node-v${NODE_VERSION}
 
-# Create symlinks
-sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/node /usr/bin/node
-sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npm /usr/bin/npm
-sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npx /usr/bin/npx
+# Skip the download entirely when the desired version is already installed and working.
+# This is the common case on repeat deploys and saves a ~25MB download + extract each run.
+if [ "$(/usr/bin/node --version 2>/dev/null)" = "v${NODE_VERSION}" ]; then
+  echo "Node.js v${NODE_VERSION} already installed, skipping download"
+else
+  # Remove any existing nodejs to avoid conflicts (using direct binary removal, no dnf)
+  sudo rm -f /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
+  sudo rm -rf /usr/local/lib/nodejs 2>/dev/null || true
+  sudo rm -rf /usr/lib/node_modules 2>/dev/null || true
+  # Also remove any dnf-installed nodejs if present (but don't use dnf to do it)
+  sudo rpm -e --nodeps nodejs npm 2>/dev/null || true
 
-# Fix SELinux context for Node.js binary (required on Oracle Linux with SELinux enforcing)
-# Files moved from /tmp retain tmp_t context; restorecon sets them to the correct usr_t/bin_t
-echo "=== Fixing SELinux context for Node.js binary ==="
-sudo restorecon -Rv /usr/local/lib/nodejs/ 2>/dev/null || true
-sudo restorecon -v /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
+  # Download and install Node.js 22 binary directly (bypasses NodeSource repo entirely)
+  cd /tmp
+  echo "Downloading Node.js ${NODE_VERSION} binary..."
+  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o node.tar.xz
+  tar -xf node.tar.xz
+  sudo rm -rf /usr/local/lib/nodejs
+  sudo mkdir -p /usr/local/lib/nodejs
+  sudo mv "node-v${NODE_VERSION}-linux-${ARCH}" /usr/local/lib/nodejs/node-v${NODE_VERSION}
+
+  # Create symlinks
+  sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/node /usr/bin/node
+  sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npm /usr/bin/npm
+  sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npx /usr/bin/npx
+
+  # Fix SELinux context for Node.js binary (required on Oracle Linux with SELinux enforcing)
+  # Files moved from /tmp retain tmp_t context; restorecon sets them to the correct usr_t/bin_t
+  echo "=== Fixing SELinux context for Node.js binary ==="
+  sudo restorecon -Rv /usr/local/lib/nodejs/ 2>/dev/null || true
+  sudo restorecon -v /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
+fi
 
 # Verify installation
 /usr/bin/node --version
