@@ -55,7 +55,14 @@ sudo rpm -e --nodeps nodejs npm 2>/dev/null || true
 
 # Download and install Node.js 22 binary directly (bypasses NodeSource repo entirely)
 NODE_VERSION="22.14.0"
-ARCH="x64"
+# Detect architecture instead of hardcoding x64 - the free-tier ARM shape
+# (VM.Standard.A1.Flex) is aarch64 and would get "Exec format error" otherwise.
+case "$(uname -m)" in
+  x86_64)        ARCH="x64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+  *) echo "ERROR: unsupported architecture $(uname -m)"; exit 1 ;;
+esac
+echo "Detected architecture: $(uname -m) -> node build '${ARCH}'"
 cd /tmp
 echo "Downloading Node.js ${NODE_VERSION} binary..."
 curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o node.tar.xz
@@ -91,7 +98,7 @@ echo "=== [4/4] Configuring npm, installing global packages, firewall, and servi
 sudo npm config set prefer-offline true
 sudo npm config set audit false
 sudo npm config set fund false
-sudo npm config set maxsockets 1
+sudo npm config set maxsockets 8
 
 # Configure git
 sudo git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -99,7 +106,7 @@ sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.c
 
 echo "=== Installing http-proxy, cline, and kanban as ORACLE_USER (not root) ==="
 # Configure npm for ORACLE_USER
-sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm config set prefer-offline true && npm config set audit false && npm config set fund false && npm config set maxsockets 1'
+sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm config set prefer-offline true && npm config set audit false && npm config set fund false && npm config set maxsockets 8'
 
 echo "=== Installing http-proxy ==="
 # Check if http-proxy is already installed
@@ -118,7 +125,7 @@ echo "Latest http-proxy version from npm: $HTTP_PROXY_LATEST_VERSION"
 # Only install/update if version differs
 if [ "$INSTALLED_HTTP_PROXY_VERSION" != "$HTTP_PROXY_LATEST_VERSION" ]; then
   echo "Installing/updating http-proxy to $HTTP_PROXY_LATEST_VERSION..."
-  sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=1' 2>&1 | tail -10
+  sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=8' 2>&1 | tail -10
 else
   echo "http-proxy is already at the latest version ($HTTP_PROXY_LATEST_VERSION), skipping installation"
 fi
@@ -172,7 +179,7 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
   # Use the tarball URL from GitHub releases
   # Capture both stdout and stderr to see what's happening
   echo "Running npm install command..."
-  sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1
+  sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=8" 2>&1
   CLINE_INSTALL_EXIT_CODE=$?
   echo "npm install exit code: $CLINE_INSTALL_EXIT_CODE"
   if [ $CLINE_INSTALL_EXIT_CODE -ne 0 ]; then
@@ -343,6 +350,16 @@ sudo mkdir -p /etc/iptables
 sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true
 
 echo "=== Creating systemd service files ==="
+
+# Size the V8 old-space heap from actual RAM. V8's default cap is derived from
+# physical memory (~256MB on a 1GB box), which makes cline GC-thrash constantly.
+# Half of RAM, clamped to [512MB, 4096MB].
+MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+HEAP_MB=$(( MEM_MB / 2 ))
+[ "$HEAP_MB" -lt 512 ] && HEAP_MB=512
+[ "$HEAP_MB" -gt 4096 ] && HEAP_MB=4096
+echo "Detected ${MEM_MB}MB RAM -> --max-old-space-size=${HEAP_MB}"
+
 echo "=== Creating kanban-proxy service ==="
 sudo tee /etc/systemd/system/kanban-proxy.service > /dev/null << SVC_EOF
 [Unit]
@@ -354,7 +371,7 @@ Type=simple
 User=${ORACLE_USER}
 WorkingDirectory=${DEPLOY_PATH}/prod_executable
 Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
-ExecStart=/usr/bin/node --jitless kanban-proxy.js
+ExecStart=/usr/bin/node kanban-proxy.js
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -378,6 +395,7 @@ Environment=KANBAN_RUNTIME_HOST=127.0.0.1
 Environment=KANBAN_RUNTIME_PORT=3485
 Environment=NODE_ENV=production
 Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
+Environment=NODE_OPTIONS=--max-old-space-size=${HEAP_MB}
 ExecStart=/usr/bin/cline kanban
 Restart=on-failure
 RestartSec=10
