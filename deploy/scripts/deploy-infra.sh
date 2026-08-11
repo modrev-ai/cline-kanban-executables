@@ -279,14 +279,30 @@ else
   fi
 fi
 
-echo "=== Verifying cline kanban command (built into cline) ==="
-# kanban is a built-in command of cline, not a separate package
-# No need to install kanban separately - it's included in the cline package
-# Verify it's available using the full path
-if /usr/bin/cline kanban --help &>/dev/null; then
-  echo "cline kanban command is available"
+echo "=== Installing standalone kanban (@modrev-ai/kanban) ==="
+# The kanban-server service runs the standalone @modrev-ai/kanban package, which
+# replaced the built-in 'cline kanban'. It is a separate npm package, so a fresh
+# box has no /usr/bin/kanban unless we install it here.
+KANBAN_TARBALL="https://github.com/modrev-ai/kanban/archive/refs/tags/"
+KANBAN_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/releases" 2>/dev/null \
+  | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' \
+  | grep -v '^vX\.Y\.Z' | head -1 || echo "")
+
+INSTALLED_KANBAN_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'npm ls -g --depth=0 2>/dev/null' \
+  | grep -oE '@modrev-ai/kanban@[^ ]*' | sed 's/.*kanban@//' || echo "")
+echo "Installed kanban version: ${INSTALLED_KANBAN_VERSION:-none}"
+echo "Latest kanban release:    ${KANBAN_LATEST_VERSION:-unknown}"
+
+if [ -z "$INSTALLED_KANBAN_VERSION" ]; then
+  if [ -n "$KANBAN_LATEST_VERSION" ]; then
+    echo "Installing @modrev-ai/kanban ${KANBAN_LATEST_VERSION}..."
+    sudo -u "${ORACLE_USER}" bash -c "npm install -g ${KANBAN_TARBALL}${KANBAN_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=8" 2>&1 | tail -10
+  else
+    echo "ERROR: kanban is not installed and no release could be resolved from GitHub" >&2
+    exit 1
+  fi
 else
-  echo "WARNING: cline kanban command not found - may need to rebuild cline"
+  echo "@modrev-ai/kanban already installed, skipping"
 fi
 
 echo "=== Creating cline symlink ==="
@@ -302,19 +318,21 @@ else
 fi
 
 echo "=== Creating kanban symlink ==="
-# Find actual kanban binary location - use npm global bin directly
+# kanban-server.service runs /usr/bin/kanban, so this symlink is required.
 if [ -f "/home/${ORACLE_USER}/.npm-global/bin/kanban" ]; then
   echo "Found kanban at: /home/${ORACLE_USER}/.npm-global/bin/kanban"
   sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
 else
-  echo "WARNING: Could not find kanban binary at npm global bin"
+  echo "ERROR: kanban binary not found - kanban-server.service would fail to start" >&2
+  exit 1
 fi
 
 echo "=== Verifying installation ==="
 node --version
 npm --version
 cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
-cline kanban --help 2>&1 | head -5 || echo "cline kanban help check completed"
+# /usr/bin/kanban is what kanban-server.service actually runs - verify it directly.
+/usr/bin/kanban --version 2>&1 | head -3 || echo "kanban --version check completed"
 
 echo "=== Configuring firewalld (single pass, no retries) ==="
 # Check if firewalld is installed
@@ -351,12 +369,17 @@ sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true
 
 echo "=== Creating systemd service files ==="
 
-# Size the V8 old-space heap from actual RAM. V8's default cap is derived from
-# physical memory (~256MB on a 1GB box), which makes cline GC-thrash constantly.
-# Half of RAM, clamped to [512MB, 4096MB].
+# Size the V8 old-space heap from actual RAM. V8 derives its default cap from
+# physical memory, which is far too small on a large box and leaves the server
+# GC-thrashing. Half of RAM, clamped to [256MB, 4096MB].
+#
+# The floor is deliberately 256 and not higher: on the 498MB E2.1.Micro, half is
+# ~249MB, and forcing a larger heap than physical RAM would just push V8 into
+# swap and make things slower. The win here is on bigger shapes -- 24GB of
+# A1.Flex yields the full 4096MB instead of the small memory-derived default.
 MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
 HEAP_MB=$(( MEM_MB / 2 ))
-[ "$HEAP_MB" -lt 512 ] && HEAP_MB=512
+[ "$HEAP_MB" -lt 256 ] && HEAP_MB=256
 [ "$HEAP_MB" -gt 4096 ] && HEAP_MB=4096
 echo "Detected ${MEM_MB}MB RAM -> --max-old-space-size=${HEAP_MB}"
 
@@ -384,7 +407,7 @@ SVC_EOF
 echo "=== Creating kanban-server service ==="
 sudo tee /etc/systemd/system/kanban-server.service > /dev/null << SVC_EOF
 [Unit]
-Description=Kanban Server (Cline)
+Description=Kanban Server (modrev-ai/kanban)
 After=network.target
 
 [Service]
@@ -396,7 +419,10 @@ Environment=KANBAN_RUNTIME_PORT=3485
 Environment=NODE_ENV=production
 Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
 Environment=NODE_OPTIONS=--max-old-space-size=${HEAP_MB}
-ExecStart=/usr/bin/cline kanban
+# Standalone kanban from modrev-ai/kanban, which replaced 'cline kanban' as the
+# server. It binds to KANBAN_RUNTIME_HOST:KANBAN_RUNTIME_PORT set above;
+# --no-open suppresses the browser launch on this headless box.
+ExecStart=/usr/bin/kanban --no-open
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
