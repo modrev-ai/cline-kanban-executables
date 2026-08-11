@@ -45,7 +45,11 @@ jobs:
   deploy-infrastructure:
     name: Deploy Infrastructure to OCI
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Provisioning installs several global npm packages (http-proxy, cline, kanban,
+    # claude-code) plus the gh CLI over a single SSH session on a bandwidth-limited
+    # box. Faster npm settings cut this down, but keep generous headroom so a slow
+    # link doesn't clip the run mid-install.
+    timeout-minutes: 45
     env:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}

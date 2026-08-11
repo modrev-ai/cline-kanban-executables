@@ -94,11 +94,24 @@ fi
 echo "Node.js version $NODE_MAJOR meets requirement (>= 22)"
 
 echo "=== [4/4] Configuring npm, installing global packages, firewall, and services ==="
-# Configure npm for speed
+# Configure npm for resilient installs on a slow / bandwidth-limited box.
+#
+# Two things caused installs to "time out" here:
+#   1. maxsockets=1 forced every request onto a single connection, so large
+#      dependency trees (cline, kanban, claude-code) downloaded serially and the
+#      whole provision crept toward the workflow's job timeout.
+#   2. There was no fetch timeout/retry policy, so a single slow or dropped tarball
+#      request aborted the install with ETIMEDOUT instead of retrying.
+# With the 4 GB swap configured above, a handful of concurrent sockets is safe, and
+# the generous fetch-timeout + retries ride out slow-link hiccups.
 sudo npm config set prefer-offline true
 sudo npm config set audit false
 sudo npm config set fund false
-sudo npm config set maxsockets 1
+sudo npm config set maxsockets 5
+sudo npm config set fetch-timeout 600000
+sudo npm config set fetch-retries 5
+sudo npm config set fetch-retry-mintimeout 20000
+sudo npm config set fetch-retry-maxtimeout 120000
 
 # Configure git
 sudo git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -106,7 +119,7 @@ sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.c
 
 echo "=== Installing http-proxy, cline, and kanban as ORACLE_USER (not root) ==="
 # Configure npm for ORACLE_USER
-sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm config set prefer-offline true && npm config set audit false && npm config set fund false && npm config set maxsockets 1'
+sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm config set prefer-offline true && npm config set audit false && npm config set fund false && npm config set maxsockets 5 && npm config set fetch-timeout 600000 && npm config set fetch-retries 5 && npm config set fetch-retry-mintimeout 20000 && npm config set fetch-retry-maxtimeout 120000'
 
 echo "=== Installing http-proxy ==="
 # Check if http-proxy is already installed
@@ -125,7 +138,7 @@ echo "Latest http-proxy version from npm: $HTTP_PROXY_LATEST_VERSION"
 # Only install/update if version differs
 if [ "$INSTALLED_HTTP_PROXY_VERSION" != "$HTTP_PROXY_LATEST_VERSION" ]; then
   echo "Installing/updating http-proxy to $HTTP_PROXY_LATEST_VERSION..."
-  sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=1' 2>&1 | tail -10
+  sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=5' 2>&1 | tail -10
 else
   echo "http-proxy is already at the latest version ($HTTP_PROXY_LATEST_VERSION), skipping installation"
 fi
@@ -179,7 +192,7 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
   # Use the tarball URL from GitHub releases
   # Capture both stdout and stderr to see what's happening
   echo "Running npm install command..."
-  sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=1" 2>&1
+  sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=5" 2>&1
   CLINE_INSTALL_EXIT_CODE=$?
   echo "npm install exit code: $CLINE_INSTALL_EXIT_CODE"
   if [ $CLINE_INSTALL_EXIT_CODE -ne 0 ]; then
@@ -329,7 +342,7 @@ if [ "$INSTALLED_KANBAN_VERSION" != "$KANBAN_TARGET_VERSION" ]; then
   # --force so npm overwrites any remaining conflicting files rather than aborting
   # with EEXIST. Safe here: this is a single-user dev box and replacing the
   # unrelated stale kanban's artifacts is exactly the intent.
-  if ! sudo -u "${ORACLE_USER}" bash -c "npm install -g @modrev-ai/kanban@${KANBAN_TARGET_VERSION} --omit=optional --maxsockets=1 --force" 2>&1; then
+  if ! sudo -u "${ORACLE_USER}" bash -c "npm install -g @modrev-ai/kanban@${KANBAN_TARGET_VERSION} --omit=optional --maxsockets=5 --force" 2>&1; then
     echo "ERROR: Failed to install @modrev-ai/kanban@${KANBAN_TARGET_VERSION}" >&2
     exit 1
   fi
@@ -374,12 +387,81 @@ else
   exit 1
 fi
 
+echo "=== Installing GitHub CLI (gh) ==="
+# gh is installed straight from its release tarball (no dnf/repo metadata refresh,
+# matching the Node.js approach) and symlinked onto PATH. It is an auxiliary tool,
+# not a service dependency, so a failed install warns rather than aborting the deploy.
+case "$(uname -m)" in
+  x86_64|amd64)  GH_ARCH="amd64" ;;
+  aarch64|arm64) GH_ARCH="arm64" ;;
+  *)             GH_ARCH="amd64" ;;
+esac
+GH_INSTALLED_VERSION="$(/usr/bin/gh --version 2>/dev/null | head -1 | sed 's/^gh version \([0-9.]*\).*/\1/' || echo "")"
+GH_LATEST_TAG="$(curl -fsSL --retry 5 --retry-delay 5 "https://api.github.com/repos/cli/cli/releases/latest" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' | head -1 || echo "")"
+GH_LATEST_VERSION="${GH_LATEST_TAG#v}"
+if [ -z "$GH_LATEST_VERSION" ]; then
+  echo "WARNING: could not resolve latest gh version; skipping gh install"
+elif [ "$GH_INSTALLED_VERSION" = "$GH_LATEST_VERSION" ]; then
+  echo "gh $GH_INSTALLED_VERSION already installed, skipping"
+else
+  echo "Installing gh ${GH_LATEST_VERSION} (${GH_ARCH})..."
+  if ( set -e
+       cd /tmp
+       GH_DIR="gh_${GH_LATEST_VERSION}_linux_${GH_ARCH}"
+       curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "https://github.com/cli/cli/releases/download/${GH_LATEST_TAG}/${GH_DIR}.tar.gz" -o gh.tar.gz
+       rm -rf "$GH_DIR"
+       tar -xf gh.tar.gz
+       sudo rm -rf /usr/local/lib/gh
+       sudo mkdir -p /usr/local/lib/gh
+       sudo cp -r "${GH_DIR}/." /usr/local/lib/gh/
+       sudo ln -sf /usr/local/lib/gh/bin/gh /usr/bin/gh
+       sudo restorecon -Rv /usr/local/lib/gh/ 2>/dev/null || true
+       sudo restorecon -v /usr/bin/gh 2>/dev/null || true
+       rm -f gh.tar.gz
+       rm -rf "$GH_DIR" ); then
+    echo "gh installed: $(/usr/bin/gh --version 2>/dev/null | head -1)"
+  else
+    echo "WARNING: gh install failed (continuing; gh is an auxiliary tool)"
+  fi
+fi
+
+echo "=== Installing Claude CLI (@anthropic-ai/claude-code) ==="
+# Claude Code is installed globally for ORACLE_USER via npm (benefiting from the
+# resilient npm config above) and symlinked onto PATH like cline/kanban. Auxiliary
+# tool: a failed install warns rather than aborting the deploy.
+CLAUDE_INSTALLED_VERSION="$(sudo -u "${ORACLE_USER}" bash -c 'claude --version 2>/dev/null' | head -1 | sed 's/[^0-9.].*//' || echo "")"
+CLAUDE_LATEST_VERSION="$(npm view @anthropic-ai/claude-code version 2>/dev/null || echo "")"
+if [ -n "$CLAUDE_LATEST_VERSION" ] && [ "$CLAUDE_INSTALLED_VERSION" = "$CLAUDE_LATEST_VERSION" ]; then
+  echo "claude $CLAUDE_INSTALLED_VERSION already installed, skipping"
+else
+  echo "Installing/updating @anthropic-ai/claude-code (latest: ${CLAUDE_LATEST_VERSION:-unknown})..."
+  if ! sudo -u "${ORACLE_USER}" bash -c 'npm install -g @anthropic-ai/claude-code --omit=optional --maxsockets=5' 2>&1; then
+    echo "WARNING: Failed to install @anthropic-ai/claude-code (continuing; claude is an auxiliary tool)"
+  fi
+fi
+# Symlink claude onto PATH (best-effort)
+if [ -f "/home/${ORACLE_USER}/.npm-global/bin/claude" ]; then
+  sudo ln -sf "/home/${ORACLE_USER}/.npm-global/bin/claude" /usr/bin/claude
+  echo "Found claude at: /home/${ORACLE_USER}/.npm-global/bin/claude"
+else
+  NPM_GLOBAL_ROOT_CLAUDE=$(timeout 10 sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null || echo "")
+  if [ -n "$NPM_GLOBAL_ROOT_CLAUDE" ] && [ -f "${NPM_GLOBAL_ROOT_CLAUDE}/@anthropic-ai/claude-code/cli.js" ]; then
+    sudo ln -sf "${NPM_GLOBAL_ROOT_CLAUDE}/@anthropic-ai/claude-code/cli.js" /usr/bin/claude
+    echo "Found claude at: ${NPM_GLOBAL_ROOT_CLAUDE}/@anthropic-ai/claude-code/cli.js"
+  else
+    echo "WARNING: Could not find claude binary after install (continuing)"
+  fi
+fi
+
 echo "=== Verifying installation ==="
 node --version
 npm --version
 cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
 echo "=== Verifying kanban (standalone, from modrev-ai/kanban) ==="
 /usr/bin/kanban --version 2>&1 | head -1 || (echo "ERROR: kanban --version failed" >&2 && exit 1)
+echo "=== Verifying auxiliary CLIs (gh, claude) ==="
+/usr/bin/gh --version 2>&1 | head -1 || echo "WARNING: gh not available on PATH"
+/usr/bin/claude --version 2>&1 | head -1 || echo "WARNING: claude not available on PATH"
 
 echo "=== Configuring SELinux (permissive) for inter-service connectivity ==="
 # The kanban-proxy (0.0.0.0:3484) connects to kanban-server on 127.0.0.1:3485. With SELinux
