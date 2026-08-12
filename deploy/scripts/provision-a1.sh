@@ -132,6 +132,30 @@ echo "=== [5/6] Launching ${NAME} (A1.Flex ${OCPUS} OCPU / ${MEMORY_GB} GB / ${B
 # A1 free-tier capacity is scarce and AD-specific, so try every AD in the region.
 ADS=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --query 'data[].name' --raw-output | tr -d '[]," ' | grep -v '^$')
 
+# Pre-flight the A1 service limit. The Always Free A1 allowance is commonly 4 OCPU /
+# 24 GB, but plenty of tenancies (trial-converted ones especially) are capped at
+# 2 / 12. Asking for more than the cap fails per-AD, which is easy to misread as a
+# capacity shortage and then "wait out" forever. Check up front and name the
+# values that would actually fit.
+PREFLIGHT_AD=$(echo "$ADS" | head -1)
+a1_limit() {
+  oci limits resource-availability get --compartment-id "$COMPARTMENT_ID" \
+    --service-name compute --limit-name "$1" --availability-domain "$PREFLIGHT_AD" \
+    --query 'data.available' --raw-output 2>/dev/null || true
+}
+AVAIL_CORES=$(a1_limit standard-a1-core-count)
+AVAIL_MEM=$(a1_limit standard-a1-memory-count)
+if [ -n "${AVAIL_CORES:-}" ] && [ -n "${AVAIL_MEM:-}" ] &&
+   printf '%s%s' "$AVAIL_CORES" "$AVAIL_MEM" | grep -qE '^[0-9]+$'; then
+  if [ "$OCPUS" -gt "$AVAIL_CORES" ] || [ "$MEMORY_GB" -gt "$AVAIL_MEM" ]; then
+    echo "ERROR: requested ${OCPUS} OCPU / ${MEMORY_GB} GB, but this tenancy has only" >&2
+    echo "       ${AVAIL_CORES} A1 core(s) / ${AVAIL_MEM} GB available in ${PREFLIGHT_AD}." >&2
+    echo "       Re-run with: --ocpus ${AVAIL_CORES} --memory ${AVAIL_MEM}" >&2
+    exit 1
+  fi
+  echo "A1 limit check OK (${AVAIL_CORES} core(s) / ${AVAIL_MEM} GB available)"
+fi
+
 launch_once() {
   for ad in $ADS; do
     echo "  Trying availability domain: $ad"
@@ -152,11 +176,17 @@ launch_once() {
       echo "  Launched in $ad"
       return 0
     fi
-    if echo "$OUT" | grep -qi "Out of host capacity\|OutOfCapacity"; then
+    # The service reports exhausted ARM capacity as a 500 InternalError whose
+    # "message" is "Out of host capacity." -- and the CLI auto-retries 5xx, so the
+    # phrase can end up buried above the tail of a long error blob. Match the whole
+    # payload, and surface code/message explicitly: a blind `tail` here hid the
+    # real reason behind trailing "troubleshooting_tips" boilerplate.
+    if echo "$OUT" | grep -qiE "out of (host )?capacity|OutOfCapacity"; then
       echo "  Out of host capacity in $ad"
     else
       echo "  Launch failed in $ad:" >&2
-      echo "$OUT" | tail -5 >&2
+      echo "$OUT" | grep -oE '"(code|message|status)": *"?[^",]*"?' | head -5 >&2 \
+        || echo "$OUT" | head -20 >&2
     fi
   done
   return 1
