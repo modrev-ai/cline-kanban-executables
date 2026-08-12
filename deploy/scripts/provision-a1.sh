@@ -66,11 +66,15 @@ TENANCY_ID=$(oci iam availability-domain list --query 'data[0]."compartment-id"'
 # single-compartment search silently misses it and the script exits below. Always
 # include the root first so this degrades to the old behavior if subtree listing
 # is unavailable.
+# The trailing `|| true` matters: under `set -e` a command substitution that ends
+# in a failing command (grep finds nothing when the caller lacks inspect-compartment
+# permission, or the tenancy is flat) would abort the whole script here instead of
+# falling back to the root-only search this is supposed to degrade to.
 COMPARTMENTS=$(
   printf '%s\n' "$TENANCY_ID"
   oci iam compartment list --compartment-id "$TENANCY_ID" --compartment-id-in-subtree true \
     --all --lifecycle-state ACTIVE --query 'data[].id' --raw-output 2>/dev/null \
-    | tr -d '[]," ' | grep -v '^$'
+    | tr -d '[]," ' | grep -v '^$' || true
 )
 
 # Locate the source instance by matching its public IP through its VNIC. The new
