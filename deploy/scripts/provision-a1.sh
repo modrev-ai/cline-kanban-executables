@@ -56,33 +56,49 @@ fi
 echo "OCI authentication OK"
 
 echo "=== [2/6] Discovering configuration from existing instance ${SOURCE_IP} ==="
-# Find the instance that owns the given public IP.
-PRIVATE_IP_JSON=$(oci network private-ip list --all --query "data[?\"ip-address\"]" 2>/dev/null || echo '[]')
-COMPARTMENT_ID=$(oci iam compartment list --query 'data[0]."compartment-id"' --raw-output 2>/dev/null || echo "")
-if [ -z "$COMPARTMENT_ID" ] || [ "$COMPARTMENT_ID" = "null" ]; then
-  COMPARTMENT_ID=$(oci iam availability-domain list --query 'data[0]."compartment-id"' --raw-output)
-fi
-echo "Compartment: ${COMPARTMENT_ID:0:30}..."
+# The tenancy (root compartment) OCID: availability-domain list is invoked against
+# the tenancy, so data[0]."compartment-id" is the root compartment OCID.
+TENANCY_ID=$(oci iam availability-domain list --query 'data[0]."compartment-id"' --raw-output)
 
-# Locate the source instance by matching its public IP through its VNIC.
+# Build the list of compartments to search: the tenancy root plus every ACTIVE
+# compartment in its subtree. `oci compute instance list` is per-compartment (not
+# recursive), and the source instance often lives in a CHILD compartment, so a
+# single-compartment search silently misses it and the script exits below. Always
+# include the root first so this degrades to the old behavior if subtree listing
+# is unavailable.
+COMPARTMENTS=$(
+  printf '%s\n' "$TENANCY_ID"
+  oci iam compartment list --compartment-id "$TENANCY_ID" --compartment-id-in-subtree true \
+    --all --lifecycle-state ACTIVE --query 'data[].id' --raw-output 2>/dev/null \
+    | tr -d '[]," ' | grep -v '^$'
+)
+
+# Locate the source instance by matching its public IP through its VNIC. The new
+# instance is launched into the SAME compartment the source was found in.
 SOURCE_INSTANCE_ID=""
 SUBNET_ID=""
-for iid in $(oci compute instance list --compartment-id "$COMPARTMENT_ID" \
-               --lifecycle-state RUNNING --query 'data[].id' --raw-output 2>/dev/null | tr -d '[]," ' | grep -v '^$'); do
-  VNIC=$(oci compute instance list-vnics --instance-id "$iid" \
-           --query 'data[0].{ip:"public-ip",subnet:"subnet-id"}' --output json 2>/dev/null || echo '{}')
-  if echo "$VNIC" | grep -q "\"$SOURCE_IP\""; then
-    SOURCE_INSTANCE_ID="$iid"
-    SUBNET_ID=$(echo "$VNIC" | grep -oE '"subnet"[^"]*"[^"]*"' | grep -oE 'ocid1[^"]*')
-    break
-  fi
+COMPARTMENT_ID=""
+for cid in $COMPARTMENTS; do
+  for iid in $(oci compute instance list --compartment-id "$cid" \
+                 --lifecycle-state RUNNING --query 'data[].id' --raw-output 2>/dev/null | tr -d '[]," ' | grep -v '^$'); do
+    VNIC=$(oci compute instance list-vnics --instance-id "$iid" \
+             --query 'data[0].{ip:"public-ip",subnet:"subnet-id"}' --output json 2>/dev/null || echo '{}')
+    if echo "$VNIC" | grep -q "\"$SOURCE_IP\""; then
+      SOURCE_INSTANCE_ID="$iid"
+      COMPARTMENT_ID="$cid"
+      SUBNET_ID=$(echo "$VNIC" | grep -oE '"subnet"[^"]*"[^"]*"' | grep -oE 'ocid1[^"]*')
+      break 2
+    fi
+  done
 done
 
 [ -n "$SUBNET_ID" ] || {
   echo "ERROR: could not find a RUNNING instance with public IP ${SOURCE_IP}." >&2
-  echo "Check that the IP is correct and the CLI is pointed at the right tenancy." >&2
+  echo "Searched the tenancy root and all subtree compartments. Check that the IP" >&2
+  echo "is correct and the CLI session is pointed at the right tenancy/region." >&2
   exit 1
 }
+echo "Found source instance in compartment: ${COMPARTMENT_ID:0:30}..."
 echo "Reusing subnet: ${SUBNET_ID:0:30}..."
 
 echo "=== [3/6] Finding the latest Oracle Linux 9 aarch64 image ==="
