@@ -47,7 +47,14 @@ fi
 
 echo "=== [3/4] Installing Node.js 22 via binary download (fastest, no repo updates) ==="
 NODE_VERSION="22.14.0"
-ARCH="x64"
+# Detect architecture instead of hardcoding x64 - the free-tier ARM shape
+# (VM.Standard.A1.Flex) is aarch64 and would get "Exec format error" otherwise.
+case "$(uname -m)" in
+  x86_64)        ARCH="x64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+  *) echo "ERROR: unsupported architecture $(uname -m)"; exit 1 ;;
+esac
+echo "Detected architecture: $(uname -m) -> node build '${ARCH}'"
 
 # Skip the download entirely when the desired version is already installed and working.
 # This is the common case on repeat deploys and saves a ~25MB download + extract each run.
@@ -517,6 +524,21 @@ sudo mkdir -p /etc/iptables
 sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null 2>&1 || true
 
 echo "=== Creating systemd service files ==="
+
+# Size the V8 old-space heap from actual RAM. V8 derives its default cap from
+# physical memory, which is far too small on a large box and leaves the server
+# GC-thrashing. Half of RAM, clamped to [256MB, 4096MB].
+#
+# The floor is deliberately 256 and not higher: on the 498MB E2.1.Micro, half is
+# ~249MB, and forcing a larger heap than physical RAM would just push V8 into
+# swap and make things slower. The win here is on bigger shapes -- 24GB of
+# A1.Flex yields the full 4096MB instead of the small memory-derived default.
+MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+HEAP_MB=$(( MEM_MB / 2 ))
+[ "$HEAP_MB" -lt 256 ] && HEAP_MB=256
+[ "$HEAP_MB" -gt 4096 ] && HEAP_MB=4096
+echo "Detected ${MEM_MB}MB RAM -> --max-old-space-size=${HEAP_MB}"
+
 echo "=== Creating kanban-proxy service ==="
 sudo tee /etc/systemd/system/kanban-proxy.service > /dev/null << SVC_EOF
 [Unit]
@@ -528,7 +550,7 @@ Type=simple
 User=${ORACLE_USER}
 WorkingDirectory=${DEPLOY_PATH}/prod_executable
 Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
-ExecStart=/usr/bin/node --jitless kanban-proxy.js
+ExecStart=/usr/bin/node kanban-proxy.js
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -552,9 +574,11 @@ Environment=KANBAN_RUNTIME_HOST=127.0.0.1
 Environment=KANBAN_RUNTIME_PORT=3485
 Environment=NODE_ENV=production
 Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
+Environment=NODE_OPTIONS=--max-old-space-size=${HEAP_MB}
 # Standalone kanban from modrev-ai/kanban's latest release. It binds to
 # KANBAN_RUNTIME_HOST:KANBAN_RUNTIME_PORT (set above), a drop-in for the previous
 # `cline kanban`. --no-open suppresses the browser launch on this headless box.
+# NODE_OPTIONS sizes the V8 heap from actual RAM (computed above).
 ExecStart=/usr/bin/kanban --no-open
 Restart=on-failure
 RestartSec=10
