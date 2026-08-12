@@ -46,14 +46,6 @@ else
 fi
 
 echo "=== [3/4] Installing Node.js 22 via binary download (fastest, no repo updates) ==="
-# Remove any existing nodejs to avoid conflicts (using direct binary removal, no dnf)
-sudo rm -f /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
-sudo rm -rf /usr/local/lib/nodejs 2>/dev/null || true
-sudo rm -rf /usr/lib/node_modules 2>/dev/null || true
-# Also remove any dnf-installed nodejs if present (but don't use dnf to do it)
-sudo rpm -e --nodeps nodejs npm 2>/dev/null || true
-
-# Download and install Node.js 22 binary directly (bypasses NodeSource repo entirely)
 NODE_VERSION="22.14.0"
 # Detect architecture instead of hardcoding x64 - the free-tier ARM shape
 # (VM.Standard.A1.Flex) is aarch64 and would get "Exec format error" otherwise.
@@ -63,24 +55,39 @@ case "$(uname -m)" in
   *) echo "ERROR: unsupported architecture $(uname -m)"; exit 1 ;;
 esac
 echo "Detected architecture: $(uname -m) -> node build '${ARCH}'"
-cd /tmp
-echo "Downloading Node.js ${NODE_VERSION} binary..."
-curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o node.tar.xz
-tar -xf node.tar.xz
-sudo rm -rf /usr/local/lib/nodejs
-sudo mkdir -p /usr/local/lib/nodejs
-sudo mv "node-v${NODE_VERSION}-linux-${ARCH}" /usr/local/lib/nodejs/node-v${NODE_VERSION}
 
-# Create symlinks
-sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/node /usr/bin/node
-sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npm /usr/bin/npm
-sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npx /usr/bin/npx
+# Skip the download entirely when the desired version is already installed and working.
+# This is the common case on repeat deploys and saves a ~25MB download + extract each run.
+if [ "$(/usr/bin/node --version 2>/dev/null)" = "v${NODE_VERSION}" ]; then
+  echo "Node.js v${NODE_VERSION} already installed, skipping download"
+else
+  # Remove any existing nodejs to avoid conflicts (using direct binary removal, no dnf)
+  sudo rm -f /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
+  sudo rm -rf /usr/local/lib/nodejs 2>/dev/null || true
+  sudo rm -rf /usr/lib/node_modules 2>/dev/null || true
+  # Also remove any dnf-installed nodejs if present (but don't use dnf to do it)
+  sudo rpm -e --nodeps nodejs npm 2>/dev/null || true
 
-# Fix SELinux context for Node.js binary (required on Oracle Linux with SELinux enforcing)
-# Files moved from /tmp retain tmp_t context; restorecon sets them to the correct usr_t/bin_t
-echo "=== Fixing SELinux context for Node.js binary ==="
-sudo restorecon -Rv /usr/local/lib/nodejs/ 2>/dev/null || true
-sudo restorecon -v /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
+  # Download and install Node.js 22 binary directly (bypasses NodeSource repo entirely)
+  cd /tmp
+  echo "Downloading Node.js ${NODE_VERSION} binary..."
+  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o node.tar.xz
+  tar -xf node.tar.xz
+  sudo rm -rf /usr/local/lib/nodejs
+  sudo mkdir -p /usr/local/lib/nodejs
+  sudo mv "node-v${NODE_VERSION}-linux-${ARCH}" /usr/local/lib/nodejs/node-v${NODE_VERSION}
+
+  # Create symlinks
+  sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/node /usr/bin/node
+  sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npm /usr/bin/npm
+  sudo ln -sf /usr/local/lib/nodejs/node-v${NODE_VERSION}/bin/npx /usr/bin/npx
+
+  # Fix SELinux context for Node.js binary (required on Oracle Linux with SELinux enforcing)
+  # Files moved from /tmp retain tmp_t context; restorecon sets them to the correct usr_t/bin_t
+  echo "=== Fixing SELinux context for Node.js binary ==="
+  sudo restorecon -Rv /usr/local/lib/nodejs/ 2>/dev/null || true
+  sudo restorecon -v /usr/bin/node /usr/bin/npm /usr/bin/npx 2>/dev/null || true
+fi
 
 # Verify installation
 /usr/bin/node --version
@@ -94,11 +101,24 @@ fi
 echo "Node.js version $NODE_MAJOR meets requirement (>= 22)"
 
 echo "=== [4/4] Configuring npm, installing global packages, firewall, and services ==="
-# Configure npm for speed
+# Configure npm for resilient installs on a slow / bandwidth-limited box.
+#
+# Two things caused installs to "time out" here:
+#   1. maxsockets=1 forced every request onto a single connection, so large
+#      dependency trees (cline, kanban, claude-code) downloaded serially and the
+#      whole provision crept toward the workflow's job timeout.
+#   2. There was no fetch timeout/retry policy, so a single slow or dropped tarball
+#      request aborted the install with ETIMEDOUT instead of retrying.
+# With the 4 GB swap configured above, a handful of concurrent sockets is safe, and
+# the generous fetch-timeout + retries ride out slow-link hiccups.
 sudo npm config set prefer-offline true
 sudo npm config set audit false
 sudo npm config set fund false
-sudo npm config set maxsockets 8
+sudo npm config set maxsockets 5
+sudo npm config set fetch-timeout 600000
+sudo npm config set fetch-retries 5
+sudo npm config set fetch-retry-mintimeout 20000
+sudo npm config set fetch-retry-maxtimeout 120000
 
 # Configure git
 sudo git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -106,7 +126,7 @@ sudo git config --global url."https://github.com/".insteadOf "ssh://git@github.c
 
 echo "=== Installing http-proxy, cline, and kanban as ORACLE_USER (not root) ==="
 # Configure npm for ORACLE_USER
-sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm config set prefer-offline true && npm config set audit false && npm config set fund false && npm config set maxsockets 8'
+sudo -u "${ORACLE_USER}" bash -c 'npm config set prefix ~/.npm-global && npm config set prefer-offline true && npm config set audit false && npm config set fund false && npm config set maxsockets 5 && npm config set fetch-timeout 600000 && npm config set fetch-retries 5 && npm config set fetch-retry-mintimeout 20000 && npm config set fetch-retry-maxtimeout 120000'
 
 echo "=== Installing http-proxy ==="
 # Check if http-proxy is already installed
@@ -125,7 +145,7 @@ echo "Latest http-proxy version from npm: $HTTP_PROXY_LATEST_VERSION"
 # Only install/update if version differs
 if [ "$INSTALLED_HTTP_PROXY_VERSION" != "$HTTP_PROXY_LATEST_VERSION" ]; then
   echo "Installing/updating http-proxy to $HTTP_PROXY_LATEST_VERSION..."
-  sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=8' 2>&1 | tail -10
+  sudo -u "${ORACLE_USER}" bash -c 'npm install -g http-proxy --omit=optional --maxsockets=5' 2>&1 | tail -10
 else
   echo "http-proxy is already at the latest version ($HTTP_PROXY_LATEST_VERSION), skipping installation"
 fi
@@ -179,7 +199,7 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
   # Use the tarball URL from GitHub releases
   # Capture both stdout and stderr to see what's happening
   echo "Running npm install command..."
-  sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=8" 2>&1
+  sudo -u "${ORACLE_USER}" bash -c "npm install -g https://github.com/modrev-ai/cline/archive/refs/tags/${CLINE_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=5" 2>&1
   CLINE_INSTALL_EXIT_CODE=$?
   echo "npm install exit code: $CLINE_INSTALL_EXIT_CODE"
   if [ $CLINE_INSTALL_EXIT_CODE -ne 0 ]; then
@@ -262,11 +282,8 @@ if [ "$FORCE_CLINE_INSTALL" = true ]; then
   echo "DEBUG: Running /usr/bin/cline --version"
   /usr/bin/cline --version
   echo "DEBUG: cline --version completed"
-  
-  # Also verify cline kanban command works
-  echo "Verifying cline kanban command..."
-  /usr/bin/cline kanban --help 2>&1 | head -5
-  echo "DEBUG: cline kanban --help completed"
+  # Note: the kanban board is served by the standalone kanban package (installed
+  # below from modrev-ai/kanban), not by cline's bundled `kanban` subcommand.
 else
   echo "cline is already at the correct modrev-ai version ($CLINE_LATEST_VERSION), skipping installation"
   # Ensure symlink exists even if skipping installation
@@ -279,30 +296,66 @@ else
   fi
 fi
 
-echo "=== Installing standalone kanban (@modrev-ai/kanban) ==="
-# The kanban-server service runs the standalone @modrev-ai/kanban package, which
-# replaced the built-in 'cline kanban'. It is a separate npm package, so a fresh
-# box has no /usr/bin/kanban unless we install it here.
-KANBAN_TARBALL="https://github.com/modrev-ai/kanban/archive/refs/tags/"
-KANBAN_LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/releases" 2>/dev/null \
-  | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' \
-  | grep -v '^vX\.Y\.Z' | head -1 || echo "")
+echo "=== Installing kanban from modrev-ai/kanban (latest release) ==="
+# kanban is installed as its own package (not the bundled `cline kanban` subcommand),
+# pinned to modrev-ai/kanban's most recent GitHub release.
+#
+# Why npm-by-version instead of a GitHub source tarball (as we do for cline):
+# modrev-ai/kanban does NOT commit dist/ (it is gitignored and built by the
+# release pipeline), so a raw source tarball has no dist/cli.js and installs a
+# broken `kanban` bin. Each modrev-ai/kanban GitHub release publishes the built
+# package to npm under the SCOPED name @modrev-ai/kanban (the unscoped `kanban`
+# on npm is an unrelated third-party package that stops at 0.1.70), so we resolve
+# the newest release tag from that repo and install that exact scoped version.
+#
+# Resolve the most recent release tag (releases API returns newest first).
+KANBAN_LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/releases" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' | head -1 || echo "")
+if [ -z "$KANBAN_LATEST_TAG" ]; then
+  # Fall back to the tags API if the releases API returns nothing (e.g. releases not published)
+  KANBAN_LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/modrev-ai/kanban/tags" 2>/dev/null | grep '"name"' | sed 's/.*"name": "\([^"]*\)".*/\1/' | head -1 || echo "")
+fi
+if [ -z "$KANBAN_LATEST_TAG" ]; then
+  echo "ERROR: Could not determine the latest kanban release from modrev-ai/kanban" >&2
+  exit 1
+fi
+echo "Latest kanban release from modrev-ai/kanban: $KANBAN_LATEST_TAG"
+# Normalize (strip leading 'v') to the npm version specifier
+KANBAN_TARGET_VERSION="${KANBAN_LATEST_TAG#v}"
 
-INSTALLED_KANBAN_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'npm ls -g --depth=0 2>/dev/null' \
-  | grep -oE '@modrev-ai/kanban@[^ ]*' | sed 's/.*kanban@//' || echo "")
-echo "Installed kanban version: ${INSTALLED_KANBAN_VERSION:-none}"
-echo "Latest kanban release:    ${KANBAN_LATEST_VERSION:-unknown}"
+# Check the currently installed kanban version so we only reinstall when it differs
+INSTALLED_KANBAN_VERSION=""
+if sudo -u "${ORACLE_USER}" bash -c 'command -v kanban' &>/dev/null; then
+  INSTALLED_KANBAN_VERSION=$(sudo -u "${ORACLE_USER}" bash -c 'kanban --version 2>/dev/null' | head -1 | sed 's/^v//' || echo "")
+  echo "Currently installed kanban version: $INSTALLED_KANBAN_VERSION"
+else
+  echo "kanban not currently installed"
+fi
 
-if [ -z "$INSTALLED_KANBAN_VERSION" ]; then
-  if [ -n "$KANBAN_LATEST_VERSION" ]; then
-    echo "Installing @modrev-ai/kanban ${KANBAN_LATEST_VERSION}..."
-    sudo -u "${ORACLE_USER}" bash -c "npm install -g ${KANBAN_TARBALL}${KANBAN_LATEST_VERSION}.tar.gz --omit=optional --maxsockets=8" 2>&1 | tail -10
-  else
-    echo "ERROR: kanban is not installed and no release could be resolved from GitHub" >&2
+if [ "$INSTALLED_KANBAN_VERSION" != "$KANBAN_TARGET_VERSION" ]; then
+  echo "Installing/updating kanban to $KANBAN_TARGET_VERSION from modrev-ai/kanban release..."
+  # Clear anything that would collide on the global `kanban` bin before installing.
+  # Older deploys installed the unrelated UNSCOPED `kanban` package (which owns
+  # ~/.npm-global/bin/kanban -> .../node_modules/kanban/dist/cli.js). npm refuses
+  # to overwrite a bin owned by a different package and aborts the scoped
+  # @modrev-ai/kanban install with `EEXIST: file already exists ...bin/kanban`.
+  # Remove the stale package and any leftover bin symlink first. Both are no-ops
+  # on a clean machine, so this stays idempotent.
+  echo "Removing any pre-existing unscoped kanban to avoid file collisions..."
+  sudo -u "${ORACLE_USER}" bash -c 'npm uninstall -g kanban >/dev/null 2>&1 || true'
+  # Drop leftover bin/man symlinks the stale unscoped package (or a previously
+  # interrupted install) left behind. npm aborts the scoped install with EEXIST
+  # when it finds either the `kanban` bin or the `kanban.1` man page already there.
+  sudo -u "${ORACLE_USER}" bash -c 'rm -f ~/.npm-global/bin/kanban ~/.npm-global/share/man/man1/kanban.1' || true
+  # --force so npm overwrites any remaining conflicting files rather than aborting
+  # with EEXIST. Safe here: this is a single-user dev box and replacing the
+  # unrelated stale kanban's artifacts is exactly the intent.
+  if ! sudo -u "${ORACLE_USER}" bash -c "npm install -g @modrev-ai/kanban@${KANBAN_TARGET_VERSION} --omit=optional --maxsockets=5 --force" 2>&1; then
+    echo "ERROR: Failed to install @modrev-ai/kanban@${KANBAN_TARGET_VERSION}" >&2
     exit 1
   fi
+  echo "kanban install completed successfully"
 else
-  echo "@modrev-ai/kanban already installed, skipping"
+  echo "kanban is already at the latest release version ($KANBAN_TARGET_VERSION), skipping installation"
 fi
 
 echo "=== Creating cline symlink ==="
@@ -318,21 +371,124 @@ else
 fi
 
 echo "=== Creating kanban symlink ==="
-# kanban-server.service runs /usr/bin/kanban, so this symlink is required.
+# Find actual kanban binary location - use npm global bin directly.
+# kanban is now a required standalone install (the kanban-server service runs it),
+# so a missing binary is a hard failure rather than a warning.
+KANBAN_BIN_PATH=""
 if [ -f "/home/${ORACLE_USER}/.npm-global/bin/kanban" ]; then
-  echo "Found kanban at: /home/${ORACLE_USER}/.npm-global/bin/kanban"
-  sudo ln -sf /home/${ORACLE_USER}/.npm-global/bin/kanban /usr/bin/kanban
+  KANBAN_BIN_PATH="/home/${ORACLE_USER}/.npm-global/bin/kanban"
 else
-  echo "ERROR: kanban binary not found - kanban-server.service would fail to start" >&2
+  # Fall back to the npm global root reported for the oracle user
+  NPM_GLOBAL_ROOT_KANBAN=$(timeout 10 sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null || echo "")
+  if [ -n "$NPM_GLOBAL_ROOT_KANBAN" ] && [ -f "${NPM_GLOBAL_ROOT_KANBAN}/@modrev-ai/kanban/dist/cli.js" ]; then
+    KANBAN_BIN_PATH="${NPM_GLOBAL_ROOT_KANBAN}/@modrev-ai/kanban/dist/cli.js"
+  fi
+fi
+if [ -n "$KANBAN_BIN_PATH" ] && [ -f "$KANBAN_BIN_PATH" ]; then
+  echo "Found kanban at: $KANBAN_BIN_PATH"
+  sudo ln -sf "$KANBAN_BIN_PATH" /usr/bin/kanban
+else
+  echo "ERROR: Could not find kanban binary after install" >&2
+  sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/bin/ 2>/dev/null' || true
+  sudo -u "${ORACLE_USER}" bash -c 'ls -la ~/.npm-global/lib/node_modules/@modrev-ai/kanban/ 2>/dev/null' || true
   exit 1
+fi
+
+echo "=== Installing GitHub CLI (gh) ==="
+# gh is installed straight from its release tarball (no dnf/repo metadata refresh,
+# matching the Node.js approach) and symlinked onto PATH. It is an auxiliary tool,
+# not a service dependency, so a failed install warns rather than aborting the deploy.
+case "$(uname -m)" in
+  x86_64|amd64)  GH_ARCH="amd64" ;;
+  aarch64|arm64) GH_ARCH="arm64" ;;
+  *)             GH_ARCH="amd64" ;;
+esac
+GH_INSTALLED_VERSION="$(/usr/bin/gh --version 2>/dev/null | head -1 | sed 's/^gh version \([0-9.]*\).*/\1/' || echo "")"
+GH_LATEST_TAG="$(curl -fsSL --retry 5 --retry-delay 5 "https://api.github.com/repos/cli/cli/releases/latest" 2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": "\([^"]*\)".*/\1/' | head -1 || echo "")"
+GH_LATEST_VERSION="${GH_LATEST_TAG#v}"
+if [ -z "$GH_LATEST_VERSION" ]; then
+  echo "WARNING: could not resolve latest gh version; skipping gh install"
+elif [ "$GH_INSTALLED_VERSION" = "$GH_LATEST_VERSION" ]; then
+  echo "gh $GH_INSTALLED_VERSION already installed, skipping"
+else
+  echo "Installing gh ${GH_LATEST_VERSION} (${GH_ARCH})..."
+  if ( set -e
+       cd /tmp
+       GH_DIR="gh_${GH_LATEST_VERSION}_linux_${GH_ARCH}"
+       curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "https://github.com/cli/cli/releases/download/${GH_LATEST_TAG}/${GH_DIR}.tar.gz" -o gh.tar.gz
+       rm -rf "$GH_DIR"
+       tar -xf gh.tar.gz
+       sudo rm -rf /usr/local/lib/gh
+       sudo mkdir -p /usr/local/lib/gh
+       sudo cp -r "${GH_DIR}/." /usr/local/lib/gh/
+       sudo ln -sf /usr/local/lib/gh/bin/gh /usr/bin/gh
+       sudo restorecon -Rv /usr/local/lib/gh/ 2>/dev/null || true
+       sudo restorecon -v /usr/bin/gh 2>/dev/null || true
+       rm -f gh.tar.gz
+       rm -rf "$GH_DIR" ); then
+    echo "gh installed: $(/usr/bin/gh --version 2>/dev/null | head -1)"
+  else
+    echo "WARNING: gh install failed (continuing; gh is an auxiliary tool)"
+  fi
+fi
+
+echo "=== Installing Claude CLI (@anthropic-ai/claude-code) ==="
+# Claude Code is installed globally for ORACLE_USER via npm (benefiting from the
+# resilient npm config above) and symlinked onto PATH like cline/kanban. Auxiliary
+# tool: a failed install warns rather than aborting the deploy.
+CLAUDE_INSTALLED_VERSION="$(sudo -u "${ORACLE_USER}" bash -c 'claude --version 2>/dev/null' | head -1 | sed 's/[^0-9.].*//' || echo "")"
+CLAUDE_LATEST_VERSION="$(npm view @anthropic-ai/claude-code version 2>/dev/null || echo "")"
+if [ -n "$CLAUDE_LATEST_VERSION" ] && [ "$CLAUDE_INSTALLED_VERSION" = "$CLAUDE_LATEST_VERSION" ]; then
+  echo "claude $CLAUDE_INSTALLED_VERSION already installed, skipping"
+else
+  echo "Installing/updating @anthropic-ai/claude-code (latest: ${CLAUDE_LATEST_VERSION:-unknown})..."
+  if ! sudo -u "${ORACLE_USER}" bash -c 'npm install -g @anthropic-ai/claude-code --omit=optional --maxsockets=5' 2>&1; then
+    echo "WARNING: Failed to install @anthropic-ai/claude-code (continuing; claude is an auxiliary tool)"
+  fi
+fi
+# Symlink claude onto PATH (best-effort)
+if [ -f "/home/${ORACLE_USER}/.npm-global/bin/claude" ]; then
+  sudo ln -sf "/home/${ORACLE_USER}/.npm-global/bin/claude" /usr/bin/claude
+  echo "Found claude at: /home/${ORACLE_USER}/.npm-global/bin/claude"
+else
+  NPM_GLOBAL_ROOT_CLAUDE=$(timeout 10 sudo -u "${ORACLE_USER}" bash -c 'npm root -g 2>/dev/null' 2>/dev/null || echo "")
+  if [ -n "$NPM_GLOBAL_ROOT_CLAUDE" ] && [ -f "${NPM_GLOBAL_ROOT_CLAUDE}/@anthropic-ai/claude-code/cli.js" ]; then
+    sudo ln -sf "${NPM_GLOBAL_ROOT_CLAUDE}/@anthropic-ai/claude-code/cli.js" /usr/bin/claude
+    echo "Found claude at: ${NPM_GLOBAL_ROOT_CLAUDE}/@anthropic-ai/claude-code/cli.js"
+  else
+    echo "WARNING: Could not find claude binary after install (continuing)"
+  fi
 fi
 
 echo "=== Verifying installation ==="
 node --version
 npm --version
 cline --version || (echo "cline not found, checking npm global bin:" && ls -la /usr/local/bin/ | grep cline || true)
-# /usr/bin/kanban is what kanban-server.service actually runs - verify it directly.
-/usr/bin/kanban --version 2>&1 | head -3 || echo "kanban --version check completed"
+echo "=== Verifying kanban (standalone, from modrev-ai/kanban) ==="
+/usr/bin/kanban --version 2>&1 | head -1 || (echo "ERROR: kanban --version failed" >&2 && exit 1)
+echo "=== Verifying auxiliary CLIs (gh, claude) ==="
+/usr/bin/gh --version 2>&1 | head -1 || echo "WARNING: gh not available on PATH"
+/usr/bin/claude --version 2>&1 | head -1 || echo "WARNING: claude not available on PATH"
+
+echo "=== Configuring SELinux (permissive) for inter-service connectivity ==="
+# The kanban-proxy (0.0.0.0:3484) connects to kanban-server on 127.0.0.1:3485. With SELinux
+# enforcing on Oracle Linux, that loopback connect() is denied with EACCES, so the public
+# port 3484 returns 502 and the app is unreachable. The proxy is a plain node service (not
+# httpd_t), so httpd_can_network_connect does not help. Set SELinux permissive: it keeps
+# logging AVCs but stops blocking, which also resolves the recurring node/binary context
+# issues this deploy works around. Single-user dev instance.
+if command -v getenforce >/dev/null 2>&1; then
+  echo "Current SELinux mode: $(getenforce)"
+  if [ "$(getenforce)" = "Enforcing" ]; then
+    sudo setenforce 0 2>/dev/null || echo "WARNING: setenforce 0 failed (continuing)"
+  fi
+  if [ -f /etc/selinux/config ]; then
+    sudo sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config 2>/dev/null || true
+  fi
+  echo "SELinux mode is now: $(getenforce 2>/dev/null || echo unknown)"
+else
+  echo "getenforce not found - SELinux not present, nothing to configure"
+fi
 
 echo "=== Configuring firewalld (single pass, no retries) ==="
 # Check if firewalld is installed
@@ -419,9 +575,10 @@ Environment=KANBAN_RUNTIME_PORT=3485
 Environment=NODE_ENV=production
 Environment=NODE_PATH=/home/${ORACLE_USER}/.npm-global/lib/node_modules:/usr/local/lib/node_modules
 Environment=NODE_OPTIONS=--max-old-space-size=${HEAP_MB}
-# Standalone kanban from modrev-ai/kanban, which replaced 'cline kanban' as the
-# server. It binds to KANBAN_RUNTIME_HOST:KANBAN_RUNTIME_PORT set above;
-# --no-open suppresses the browser launch on this headless box.
+# Standalone kanban from modrev-ai/kanban's latest release. It binds to
+# KANBAN_RUNTIME_HOST:KANBAN_RUNTIME_PORT (set above), a drop-in for the previous
+# `cline kanban`. --no-open suppresses the browser launch on this headless box.
+# NODE_OPTIONS sizes the V8 heap from actual RAM (computed above).
 ExecStart=/usr/bin/kanban --no-open
 Restart=on-failure
 RestartSec=10

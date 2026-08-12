@@ -191,10 +191,19 @@ gh workflow run deploy-oracle.yml --repo modrev-ai/cline-kanban-executables
 
 ### Access After Deployment
 
-After successful deployment:
+After successful deployment, always use **port 3484** (the proxy):
 
-- **Kanban Proxy (via Tailscale)**: `http://<tailscale-ip>:3484`
-- **Kanban Server (Direct)**: `http://<oracle-ip>:3485`
+- **Kanban (Public / Direct)**: `http://<oracle-ip>:3484`
+- **Kanban (via Tailscale)**: `http://<tailscale-ip>:3484`
+
+> **Note:** Port **3485** is the internal Kanban server. It binds to `127.0.0.1` only and is
+> **not reachable** from the public IP by design — the proxy on 3484 rewrites the `Host`/`Origin`
+> headers so Cline's host check accepts the request. Only 3484 is exposed externally.
+>
+> If `http://<oracle-ip>:3484` is unreachable even though the deploy succeeded, the OCI **VCN
+> Security List** (or the instance's **Network Security Group**) is almost certainly missing an
+> ingress rule. Add one for **TCP 3484**, Source CIDR `0.0.0.0/0`. This is a cloud-network setting
+> in the OCI Console and cannot be configured from inside the instance or by this workflow.
 
 ### Manual Service Management
 
@@ -279,6 +288,7 @@ For detailed documentation, see the [`docs/`](docs/) folder:
 
 | Document | Description |
 |----------|-------------|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Runtime architecture (proxy/backend), with Mermaid diagrams |
 | [WORKFLOW.md](docs/WORKFLOW.md) | Complete CI/CD pipeline documentation |
 | [ORACLE_DEPLOYMENT.md](docs/ORACLE_DEPLOYMENT.md) | Oracle Cloud Free Tier deployment guide |
 | [ORACLE_DEPLOYMENT_COMPLETE.md](docs/ORACLE_DEPLOYMENT_COMPLETE.md) | Complete deployment notes |

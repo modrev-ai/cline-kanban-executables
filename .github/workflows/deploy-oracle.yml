@@ -35,17 +35,9 @@ jobs:
       force: ${{ fromJson(github.event.inputs.force) }}
     secrets: inherit
 
-  auth-setup:
-    name: Setup SSH and Environment
-    needs: validate-yaml
-    uses: ./.github/workflows/auth-setup.yml
-    with:
-      environment: ${{ github.event.inputs.environment }}
-    secrets: inherit
-
   deploy-infrastructure:
     name: Deploy Infrastructure to OCI
-    needs: auth-setup
+    needs: validate-yaml
     uses: ./.github/workflows/deploy-infrastructure.yml
     with:
       environment: ${{ github.event.inputs.environment }}
@@ -54,7 +46,7 @@ jobs:
 
   deploy-to-oci:
     name: Deploy Files to OCI
-    needs: [build-package, auth-setup, deploy-infrastructure]
+    needs: [build-package, deploy-infrastructure]
     uses: ./.github/workflows/deploy-to-oci.yml
     with:
       environment: ${{ github.event.inputs.environment }}

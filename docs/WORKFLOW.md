@@ -213,16 +213,34 @@ base64 -i ~/.ssh/oracle_key | tr -d '\n'
 5. **Install Node.js & Dependencies on Oracle**:
    - Add 4GB swap file (prevents OOM on free tier)
    - Install Node.js 22.14.0 via binary tarball (low memory)
-   - Install git, configure npm for low memory
+   - Install git, and configure npm for **resilient installs** on a slow/bandwidth-limited box: a few concurrent sockets (`maxsockets 5`, safe with the swap above) plus a generous fetch policy (`fetch-timeout 600000`, `fetch-retries 5`) so large tarballs don't abort with `ETIMEDOUT`. (Previously `maxsockets 1` serialized every request and pushed the provision toward the job timeout.)
    - Install `http-proxy` globally
-   - Install latest `cline` from `modrev-ai/cline` releases
+   - Install latest `cline` from `modrev-ai/cline` releases (GitHub source tarball)
+   - Install latest `kanban` from the **scoped npm package `@modrev-ai/kanban`**, pinned to `modrev-ai/kanban`'s latest GitHub release tag
+   - Install the **GitHub CLI (`gh`)** from its release tarball (arch-detected, no `dnf`) and symlink onto `PATH`
+   - Install the **Claude CLI (`@anthropic-ai/claude-code`)** globally via npm and symlink `claude` onto `PATH`
+   - `gh` and `claude` are auxiliary tools (not service dependencies): a failed install warns and the deploy continues
 6. **Create & Deploy systemd Services**:
    - `kanban-proxy.service` (port 3484, header rewriting proxy)
-   - `kanban-server.service` (port 3485, Kanban app via `cline kanban`)
+   - `kanban-server.service` (port 3485, Kanban app via standalone `kanban`)
    - Deploy via SCP, move to `/etc/systemd/system/`, `daemon-reload`
 7. **Configure Firewall**: Open ports 3484/3485 (firewalld + iptables fallback)
 8. **Enable & Start Services**: `systemctl enable/start` both services
 9. **Wait for Services**: 10s delay, then show status
+
+> **Kanban install mechanism (important).** Unlike `cline` — installed from a GitHub
+> source tarball — `kanban` is installed from the **scoped npm package
+> `@modrev-ai/kanban`**, at the version matching `modrev-ai/kanban`'s latest GitHub
+> release tag. Get this wrong and the deploy fails at the kanban step:
+> - The **unscoped** `kanban` on npm is an unrelated third-party package (capped at
+>   `0.1.70`). Installing `kanban@<modrev-version>` fails with
+>   `ETARGET / No matching version found`. Always use the scoped `@modrev-ai/kanban`.
+> - `modrev-ai/kanban` does **not** commit `dist/` (it is built by the release
+>   pipeline and published to npm), so a raw source tarball would install a broken
+>   `kanban` bin — hence npm-by-version rather than a tarball as with `cline`.
+> - Before installing, the script removes any stale global `kanban` (the `bin/kanban`
+>   and `man1/kanban.1` symlinks) and installs with `--force`, so leftovers from an
+>   earlier unscoped install don't abort the scoped install with `EEXIST`.
 
 ---
 
