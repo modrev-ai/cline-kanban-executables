@@ -138,10 +138,26 @@ ADS=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --quer
 # capacity shortage and then "wait out" forever. Check up front and name the
 # values that would actually fit.
 PREFLIGHT_AD=$(echo "$ADS" | head -1)
+# The limits API intermittently reports 0 available even when the quota is actually
+# free (an eventual-consistency flake that shows up under the same ARM pressure that
+# exhausts host capacity). Fail-closed on a single low read is dangerous here: an
+# automated retry loop would skip the pass, and if that coincided with a real capacity
+# window we'd miss it. So read a few times and keep the MAX -- a lone flaky low read is
+# ignored, and only a value that is *consistently* below the request trips the check.
 a1_limit() {
-  oci limits resource-availability get --compartment-id "$COMPARTMENT_ID" \
-    --service-name compute --limit-name "$1" --availability-domain "$PREFLIGHT_AD" \
-    --query 'data.available' --raw-output 2>/dev/null || true
+  # Empty (not 0) when no read ever returns a valid number, so the caller's existing
+  # `-n` guard keeps failing OPEN (skip the check) if the limits API is unreachable,
+  # rather than reading "0 available" and aborting.
+  local best="" val
+  for _ in 1 2 3; do
+    val=$(oci limits resource-availability get --compartment-id "$COMPARTMENT_ID" \
+      --service-name compute --limit-name "$1" --availability-domain "$PREFLIGHT_AD" \
+      --query 'data.available' --raw-output 2>/dev/null || true)
+    if printf '%s' "$val" | grep -qE '^[0-9]+$' && { [ -z "$best" ] || [ "$val" -gt "$best" ]; }; then
+      best="$val"
+    fi
+  done
+  printf '%s' "$best"
 }
 AVAIL_CORES=$(a1_limit standard-a1-core-count)
 AVAIL_MEM=$(a1_limit standard-a1-memory-count)
