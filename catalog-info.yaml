@@ -1,0 +1,36 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: cline-kanban-executables
+  description: Scripts that stop every running Kanban and Cline process and restart both in development mode, plus the workflows that deploy Kanban behind its header-rewriting proxy to an Oracle Cloud instance.
+  tags: [powershell, batch, bash, node, github-actions]
+  annotations:
+    modrev.ai/run: "start\\start-all.bat --skip-build"
+  links:
+    - url: README.md
+    - url: docs/ARCHITECTURE.md
+    - url: docs/WORKFLOW.md
+    - url: docs/ORACLE_DEPLOYMENT.md
+    - url: docs/PERFORMANCE.md
+spec:
+  type: tool
+  lifecycle: production
+  owner: unassigned
+  dependsOn:
+    - component:kanban
+    - component:cline
+  features:
+    - Kills the node, tsx and bun processes that belong to Kanban or Cline
+    - Optionally rebuilds Kanban with npm run build and Cline with bun run build:sdk first
+    - Restarts Kanban with npm run dev and Cline with bun run cli, each in its own window
+    - Restarts only one of the two with the Kanban-only or Cline-only switch
+    - Can also start the header-rewriting proxy and Tailscale serve for remote access
+    - Deploys the proxy and the Kanban server as systemd services on an Oracle instance through GitHub Actions
+    - Sets the deploy's GitHub secrets ORACLE_HOST, ORACLE_USER, ORACLE_SSH_KEY and DEPLOY_PATH from a setup script
+  subcomponents:
+    - start/ - start-all and start-all-with-tailscale, as .bat and .ps1
+    - prod_executable/ - kanban-proxy.js and the cline-remote-launch scripts deployed to Oracle
+    - .github/workflows/ - deploy-oracle, deploy-to-oci, deploy-infrastructure, build-package, health-check and validate-yaml
+    - deploy/ - install-oci.ps1 and the deploy-infra and provision-a1 scripts
+    - scripts/setup/ - GitHub secret setup and the Oracle instance setup
+    - scripts/generators/ and scripts/writers/ - the generators that wrote the workflow and setup files
