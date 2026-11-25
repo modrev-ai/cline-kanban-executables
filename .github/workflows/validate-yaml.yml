@@ -1,16 +1,9 @@
 name: Validate YAML Syntax
 
+# Manual only (25 Nov 2026, Jong: GitHub is code storage first; Actions only for public-site deploys
+# and jobs that must run on GitHub).
 on:
-  push:
-    paths:
-      - '*.yml'
-      - '*.yaml'
-      - '.github/workflows/**'
-  pull_request:
-    paths:
-      - '*.yml'
-      - '*.yaml'
-      - '.github/workflows/**'
+  workflow_dispatch:
   workflow_call:
 
 jobs:
